@@ -1,6 +1,9 @@
+from urllib import request
+
 from fastapi import FastAPI
 from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
+from app.modules.claim_extractor import extract_claims
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -21,9 +24,11 @@ def analyze_text(request: AnalysisRequest):
     Real AI logic will be added later.
     """
 
+    claims = extract_claims(request.text)
+
     return AnalysisResponse(
         original_text=request.text,
-        claims=[],
+        claims=claims,
         overall_trust_score=0.0,
-        message="Analysis pipeline initialized. Claim extraction not yet implemented."
+        message="Claim extraction completed. Classification and scoring pending."
     )
