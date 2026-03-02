@@ -11,19 +11,20 @@ def extract_claims(text: str) -> List[Claim]:
     """
 
     prompt = f"""
-    Extract atomic factual claims from the following text.
+    Extract all atomic statements from the following text.
 
     Rules:
-    - Extract only factual claims.
-    - Do not include opinions or predictions.
-    - Each claim must be standalone.
+    - Break text into standalone atomic statements.
+    - Include factual statements, opinions, and predictions.
+    - Each statement must be self-contained.
+    - Do not merge multiple ideas into one.
     - Return strictly valid JSON.
     - Format:
 
     {{
         "claims": [
-            {{"text": "claim 1"}},
-            {{"text": "claim 2"}}
+            {{"text": "statement 1"}},
+            {{"text": "statement 2"}}
         ]
     }}
 
