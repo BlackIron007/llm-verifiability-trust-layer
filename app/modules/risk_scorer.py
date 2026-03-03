@@ -2,9 +2,9 @@ from typing import List
 from app.schemas.claim import Claim, ClaimType, RiskLevel
 
 BASE_RISK_MAP = {
-    ClaimType.HARD_FACT: 0.7,
+    ClaimType.HARD_FACT: 0.3,
     ClaimType.SOFT_FACT: 0.5,
-    ClaimType.PREDICTION: 0.6,
+    ClaimType.PREDICTION: 0.7,
     ClaimType.OPINION: 0.2
 }
 
