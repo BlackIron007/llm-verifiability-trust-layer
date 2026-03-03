@@ -4,6 +4,7 @@ from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
 from app.modules.claim_extractor import extract_claims
 from app.modules.claim_classifier import classify_claim
+from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_score
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -24,12 +25,14 @@ def analyze_text(request: AnalysisRequest):
     Real AI logic will be added later.
     """
 
-    cclaims = extract_claims(request.text)
-    classified_claims = [classify_claim(c) for c in cclaims]
+    claims = extract_claims(request.text)
+    classified_claims = [classify_claim(c) for c in claims]
+    scored_claims = [assign_baseline_risk(c) for c in classified_claims]
+    overall_score = compute_overall_trust_score(scored_claims)
 
     return AnalysisResponse(
         original_text=request.text,
-        claims=classified_claims,
-        overall_trust_score=0.0,
-        message="Claim extraction and classification completed. Scoring pending."
+        claims=scored_claims,
+        overall_trust_score=overall_score,
+        message="Extraction, classification, and baseline risk scoring completed."
     )
