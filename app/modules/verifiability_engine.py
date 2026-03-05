@@ -1,6 +1,7 @@
 from app.schemas.claim import Claim, ClaimType
 from app.services.model_client import ModelClient
 from app.modules.risk_scorer import compute_risk_level
+from app.services.embedding_service import compute_similarity
 import re
 import json
 
@@ -30,13 +31,12 @@ def refine_verifiability(claim: Claim) -> Claim:
 
     explanation_2 = ModelClient.generate(explanation_prompt_2)
 
-    len_diff = abs(len(explanation_1) - len(explanation_2))
-
-    instability_score = min(len_diff / 200, 1.0)
+    similarity = compute_similarity(explanation_1, explanation_2)
+    instability_score = 1 - similarity
 
     if claim.verifiability_score is not None:
         claim.verifiability_score = round(
-            min(claim.verifiability_score + instability_score * 0.2, 1.0),
+            min(claim.verifiability_score + instability_score * 0.15, 1.0),
             3
         )
         claim.risk_level = compute_risk_level(claim.verifiability_score)
