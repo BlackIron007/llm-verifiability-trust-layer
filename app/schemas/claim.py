@@ -22,3 +22,4 @@ class Claim(BaseModel):
     risk_level: Optional[RiskLevel] = None
     explanation: Optional[str] = None
     secondary_explanation: Optional[str] = None
+    tertiary_explanation: Optional[str] = None
