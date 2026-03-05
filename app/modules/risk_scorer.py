@@ -20,14 +20,21 @@ def assign_baseline_risk(claim: Claim) -> Claim:
     base_score = BASE_RISK_MAP.get(claim.claim_type, 0.5)
     claim.verifiability_score = base_score
 
-    if base_score >= 0.65:
-        claim.risk_level = RiskLevel.HIGH
-    elif base_score >= 0.4:
-        claim.risk_level = RiskLevel.MEDIUM
-    else:
-        claim.risk_level = RiskLevel.LOW
+    claim.risk_level = compute_risk_level(base_score)
 
     return claim
+
+def compute_risk_level(score: float) -> RiskLevel:
+    """
+    Convert numeric uncertainty score into categorical risk level.
+    """
+
+    if score >= 0.65:
+        return RiskLevel.HIGH
+    elif score >= 0.4:
+        return RiskLevel.MEDIUM
+    else:
+        return RiskLevel.LOW
 
 def compute_overall_trust_score(claims: List[Claim]) -> float:
     """

@@ -1,5 +1,6 @@
 from app.schemas.claim import Claim, ClaimType
 from app.services.model_client import ModelClient
+from app.modules.risk_scorer import compute_risk_level
 import re
 import json
 
@@ -38,6 +39,7 @@ def refine_verifiability(claim: Claim) -> Claim:
             min(claim.verifiability_score + instability_score * 0.2, 1.0),
             3
         )
+        claim.risk_level = compute_risk_level(claim.verifiability_score)
 
     claim.explanation = explanation_1.strip()
 
