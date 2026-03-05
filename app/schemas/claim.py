@@ -15,9 +15,10 @@ class RiskLevel(str, Enum):
     HIGH = "high"
 
 class Claim(BaseModel):
-    id: Optional[int] = Field(default=None)
-    text: str = Field(..., min_length=5)
+    id: Optional[int] = None
+    text: str
     claim_type: Optional[ClaimType] = None
-    verifiability_score: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    verifiability_score: Optional[float] = None
     risk_level: Optional[RiskLevel] = None
     explanation: Optional[str] = None
+    secondary_explanation: Optional[str] = None
