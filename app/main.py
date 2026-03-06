@@ -52,15 +52,21 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     analysis = analyze_text(AnalysisRequest(text=answer))
 
+    epistemic_risk = 1 - analysis.overall_trust_score
+    epistemic_trust = analysis.overall_trust_score
+    
+    final_trust_score = round(relevance_score * epistemic_trust, 3)
+    
     signals = {
         "qa_relevance": relevance_score,
-        "epistemic_risk": 1 - analysis.overall_trust_score
+        "epistemic_risk": round(epistemic_risk, 3),
+        "epistemic_trust": round(epistemic_trust, 3)
     }
 
     return AnalysisResponse(
         original_text=answer,
         claims=analysis.claims,
-        overall_trust_score=analysis.overall_trust_score,
+        overall_trust_score=final_trust_score,
         signals=signals,
         message="LLM response verification completed."
     )
