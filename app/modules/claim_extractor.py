@@ -42,7 +42,16 @@ def extract_claims(text: str) -> List[Claim]:
 
     json_string = json_match.group(0)
 
-    parsed = json.loads(json_string)
-    claims_data = parsed.get("claims", [])
+    try:
+        parsed = json.loads(json_string)
+    except json.JSONDecodeError:
+        sanitized = re.sub(r",\s*(\]|\})", r"\\1", json_string)
+        try:
+            parsed = json.loads(sanitized)
+        except json.JSONDecodeError:
+            texts = re.findall(r'"text"\s*:\s*"(.*?)"', raw_response, flags=re.DOTALL)
+            cleaned = [re.sub(r"\\n", " ", t).strip() for t in texts if t.strip()]
+            return [Claim(text=t) for t in cleaned]
 
-    return [Claim(text=c["text"]) for c in claims_data]
+    claims_data = parsed.get("claims", [])
+    return [Claim(text=c.get("text", "").strip()) for c in claims_data if isinstance(c, dict) and c.get("text")]

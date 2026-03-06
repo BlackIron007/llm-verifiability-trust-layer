@@ -1,4 +1,3 @@
-from urllib import request
 from fastapi import FastAPI
 from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
@@ -6,6 +5,8 @@ from app.modules.claim_extractor import extract_claims
 from app.modules.claim_classifier import classify_claim
 from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_score
 from app.modules.verifiability_engine import refine_verifiability
+from app.schemas.llm_request import LLMVerificationRequest
+from app.services.relevance_service import compute_qa_relevance
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -17,7 +18,6 @@ app = FastAPI(
 @app.get("/")
 def root():
     return {"message": "LLM Verifiability Trust Layer API is running"}
-
 
 @app.post("/analyze", response_model=AnalysisResponse)
 def analyze_text(request: AnalysisRequest):
@@ -36,5 +36,31 @@ def analyze_text(request: AnalysisRequest):
         original_text=request.text,
         claims=refined_claims,
         overall_trust_score=overall_score,
+        signals={
+            "epistemic_risk": 1 - overall_score
+        },
         message="Full pipeline completed with verifiability refinement."
+    )
+    
+@app.post("/verify_llm_response", response_model=AnalysisResponse)
+def verify_llm_response(request: LLMVerificationRequest):
+
+    question = request.question
+    answer = request.answer
+
+    relevance_score = compute_qa_relevance(question, answer)
+
+    analysis = analyze_text(AnalysisRequest(text=answer))
+
+    signals = {
+        "qa_relevance": relevance_score,
+        "epistemic_risk": 1 - analysis.overall_trust_score
+    }
+
+    return AnalysisResponse(
+        original_text=answer,
+        claims=analysis.claims,
+        overall_trust_score=analysis.overall_trust_score,
+        signals=signals,
+        message="LLM response verification completed."
     )

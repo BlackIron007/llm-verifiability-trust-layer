@@ -8,3 +8,4 @@ class AnalysisResponse(BaseModel):
     claims: List[Claim]
     overall_trust_score: float
     message: str
+    signals: dict
