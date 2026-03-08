@@ -7,6 +7,7 @@ from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_
 from app.modules.verifiability_engine import refine_verifiability
 from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
+from app.services.evidence_service import retrieve_wikipedia_evidence
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -54,6 +55,12 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     epistemic_risk = 1 - analysis.overall_trust_score
     epistemic_trust = analysis.overall_trust_score
+
+    for claim in analysis.claims:
+        try:
+            claim.evidence = retrieve_wikipedia_evidence(claim.text)
+        except Exception:
+            claim.evidence = []
     
     final_trust_score = round(relevance_score * epistemic_trust, 3)
     

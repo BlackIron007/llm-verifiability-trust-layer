@@ -1,6 +1,8 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from enum import Enum
+from typing import List
+from app.schemas.evidence import Evidence
 
 
 class ClaimType(str, Enum):
@@ -23,3 +25,4 @@ class Claim(BaseModel):
     explanation: Optional[str] = None
     secondary_explanation: Optional[str] = None
     tertiary_explanation: Optional[str] = None
+    evidence: List[Evidence] = []
