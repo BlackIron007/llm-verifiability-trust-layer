@@ -4,6 +4,19 @@ from typing import List
 from app.schemas.claim import Claim
 from app.services.model_client import ModelClient
 
+META_PHRASES = (
+    "Here is the atomic statement",
+    "Here are the atomic statements",
+    "This statement is",
+    "The quote is",
+    "I am",
+    "I'm",
+    "As an AI",
+    "The atomic statement",
+    "This is a tautology",
+    "The statement is a complete factual unit",
+)
+
 
 def repair_split_claims(claims: List[Claim]) -> List[Claim]:
     """
@@ -27,17 +40,36 @@ def repair_split_claims(claims: List[Claim]) -> List[Claim]:
     return merged
 
 
+def _strip_outer_quotes(s: str) -> str:
+    s = s.strip()
+    if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
+        return s[1:-1].strip()
+    return s
+
+
+def _is_meta_statement(s: str) -> bool:
+    lower = s.lower()
+    if any(phrase.lower() in lower for phrase in META_PHRASES):
+        return True
+    if re.match(r"^(here is|here are|this statement|the quote|note:|explanation:|analysis:|reasoning:|justification:)\b", lower):
+        return True
+    return False
+
+
 def filter_claims(claims: List[Claim]) -> List[Claim]:
-    """Remove fragments that are too short or start with leading prepositions."""
+    """Sanitize and remove fragments/meta/instructional statements."""
     filtered: List[Claim] = []
     for c in claims:
-        text = (c.text or "").strip()
+        text = _strip_outer_quotes((c.text or "").strip())
         if not text:
             continue
         if len(text.split()) < 2:
             continue
         if text.lower().startswith(("in ", "on ", "at ", "during ", "after ", "before ")):
             continue
+        if _is_meta_statement(text):
+            continue
+        c.text = text
         filtered.append(c)
     return filtered
 
@@ -47,30 +79,26 @@ def extract_claims(text: str) -> List[Claim]:
     Extract atomic factual claims using LLM via OpenRouter.
     """
 
-    prompt = f"""
-    Extract all atomic statements from the following text.
+    prompt = f'''You are a precise claim extractor. Extract only atomic, declarative statements from the provided Text. Do not add explanations, headings, or meta commentary.
 
-    Rules (critical):
-    - Keep each claim as a complete factual unit that preserves modifiers that change truth conditions
-      (dates, locations, quantities, names, constraints). Do NOT split such modifiers onto a new line.
-      Example: Correct -> "India became independent in 1947" (ONE claim). Incorrect ->
-      "India became independent" / "in 1947" (split into two lines).
-    - Break text into standalone atomic statements without merging unrelated ideas.
-    - Include factual statements, opinions, and predictions.
-    - Each statement must be self-contained and verifiable as-is (no trailing fragments like "in 1947").
-    - Return strictly valid JSON.
-    - Format:
+Rules (critical):
+- Each claim MUST be a single, self-contained factual statement that preserves modifiers that change truth conditions (dates, locations, quantities, names). Do NOT split such modifiers.
+  Example: Correct -> "India became independent in 1947" (ONE claim). Incorrect -> "India became independent" / "in 1947".
+- Do NOT include instructions, descriptions about statements, or quotes introducing a statement (e.g., "Here is the atomic statement...").
+- Do NOT include questions, imperatives, or meta text about the task.
+- Output strictly valid JSON. Do not include any text before or after JSON.
 
-    {{
-        "claims": [
-            {{"text": "statement 1"}},
-            {{"text": "statement 2"}}
-        ]
-    }}
+Format:
+{{
+  "claims": [
+    {{"text": "statement 1"}},
+    {{"text": "statement 2"}}
+  ]
+}}
 
-    Text:
-    \"\"\"{text}\"\"\"
-    """
+Text:
+"""{text}"""
+'''
 
     raw_response = ModelClient.generate(prompt)
     # print("RAW MODEL RESPONSE:")
@@ -115,4 +143,13 @@ def extract_claims(text: str) -> List[Claim]:
     claims = [Claim(text=c.get("text", "").strip()) for c in claims_data if isinstance(c, dict) and c.get("text")]
     claims = repair_split_claims(claims)
     claims = filter_claims(claims)
-    return claims
+
+    seen = set()
+    deduped: List[Claim] = []
+    for c in claims:
+        key = c.text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(c)
+    return deduped

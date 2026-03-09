@@ -3,6 +3,7 @@ from app.services.embedding_service import compute_similarity
 from app.schemas.evidence import Evidence
 import nltk
 from nltk.tokenize import sent_tokenize
+from ddgs import DDGS
 
 
 def best_sentence_match(claim_text: str, paragraph: str):
@@ -29,6 +30,17 @@ def best_sentence_match(claim_text: str, paragraph: str):
     return best_sentence, best_score
 
 
+def retrieve_evidence(claim_text: str, top_k: int = 3):
+    evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
+
+    if not evidence_list:
+        return retrieve_ddgs_evidence(claim_text, top_k)
+
+    if max(e.similarity for e in evidence_list) < 0.4:
+        return retrieve_ddgs_evidence(claim_text, top_k)
+
+    return evidence_list
+
 
 def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
     """
@@ -49,21 +61,59 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
 
                 best_sentence, similarity = best_sentence_match(claim_text, summary)
 
-                evidence_list.append(
-                    Evidence(
-                        source="Wikipedia",
-                        title=title,
-                        url=page.url,
-                        evidence=best_sentence,
-                        similarity=round(similarity, 3)
+                if similarity >= 0.4:
+                    evidence_list.append(
+                        Evidence(
+                            source="Wikipedia",
+                            title=title,
+                            url=page.url,
+                            evidence=best_sentence,
+                            similarity=round(similarity, 3)
+                        )
                     )
-                )
 
             except Exception:
                 continue
 
     except Exception:
         pass
+
+    evidence_list.sort(key=lambda x: x.similarity, reverse=True)
+
+    return evidence_list[:top_k]
+
+
+def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
+    evidence_list = []
+
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(claim_text, max_results=top_k))
+
+            for r in results:
+                title = r.get("title", "")
+                url = r.get("href", "")
+
+                snippet = r.get("body") or r.get("snippet") or ""
+
+                if not snippet:
+                    continue
+
+                best_sentence, similarity = best_sentence_match(claim_text, snippet)
+
+                if similarity >= 0.30:
+                    evidence_list.append(
+                        Evidence(
+                            source="DDGS",
+                            title=title,
+                            url=url,
+                            evidence=best_sentence,
+                            similarity=round(similarity, 3)
+                        )
+                    )
+
+    except Exception as e:
+        print("DDGS ERROR:", e)
 
     evidence_list.sort(key=lambda x: x.similarity, reverse=True)
 

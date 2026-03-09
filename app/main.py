@@ -7,7 +7,7 @@ from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_
 from app.modules.verifiability_engine import refine_verifiability
 from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
-from app.services.evidence_service import retrieve_wikipedia_evidence
+from app.services.evidence_service import retrieve_evidence
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -58,7 +58,7 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     for claim in analysis.claims:
         try:
-            claim.evidence = retrieve_wikipedia_evidence(claim.text)
+            claim.evidence = retrieve_evidence(claim.text)
         except Exception:
             claim.evidence = []
     
