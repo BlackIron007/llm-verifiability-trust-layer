@@ -8,6 +8,8 @@ from app.modules.verifiability_engine import refine_verifiability
 from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
 from app.services.evidence_service import retrieve_evidence
+from app.modules.consistency_checker import check_question_claim_consistency
+from app.schemas.claim import RiskLevel
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -53,15 +55,24 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     analysis = analyze_text(AnalysisRequest(text=answer))
 
-    epistemic_risk = 1 - analysis.overall_trust_score
-    epistemic_trust = analysis.overall_trust_score
-
     for claim in analysis.claims:
         try:
             claim.evidence = retrieve_evidence(claim.text)
         except Exception:
             claim.evidence = []
+        
+        is_consistent, sim = check_question_claim_consistency(question, claim.text)
+        claim.qa_consistent = is_consistent
+        claim.qa_similarity = round(sim, 3)
+
+        if not is_consistent:
+            claim.verifiability_score = 1.0
+            claim.risk_level = RiskLevel.high
+            claim.evidence = []
     
+    epistemic_trust = compute_overall_trust_score(analysis.claims)
+    epistemic_risk = 1 - epistemic_trust
+
     final_trust_score = round(relevance_score * epistemic_trust, 3)
     
     signals = {

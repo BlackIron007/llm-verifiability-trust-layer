@@ -65,7 +65,7 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                     evidence_list.append(
                         Evidence(
                             source="Wikipedia",
-                            title=title,
+                            title=page.title,
                             url=page.url,
                             evidence=best_sentence,
                             similarity=round(similarity, 3)

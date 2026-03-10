@@ -26,3 +26,5 @@ class Claim(BaseModel):
     secondary_explanation: Optional[str] = None
     tertiary_explanation: Optional[str] = None
     evidence: List[Evidence] = []
+    qa_consistent: bool | None = None
+    qa_similarity: float | None = None
