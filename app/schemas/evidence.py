@@ -10,3 +10,4 @@ class Evidence(BaseModel):
     support_label: str | None = None
     support_score: float | None = None
     source_trust: float | None = None
+    evidence_score: float | None = None

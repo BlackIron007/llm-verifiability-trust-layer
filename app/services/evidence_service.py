@@ -8,6 +8,24 @@ from app.services.nli_service import check_claim_evidence_support
 from app.services.source_trust_service import compute_source_trust
 
 
+def compute_evidence_score(similarity, support_score, source_trust):
+    """
+    Compute a final ranking score for evidence.
+    """
+
+    similarity = similarity or 0
+    support_score = support_score or 0
+    source_trust = source_trust or 0
+
+    score = (
+        0.4 * similarity +
+        0.4 * support_score +
+        0.2 * source_trust
+    )
+
+    return round(score, 3)
+
+
 def best_sentence_match(claim_text: str, paragraph: str):
     """
     Find the sentence in a paragraph that best matches the claim.
@@ -42,6 +60,18 @@ def retrieve_evidence(claim_text: str, top_k: int = 3):
         label, score = check_claim_evidence_support(claim_text, ev.evidence)
         ev.support_label = label
         ev.support_score = round(score, 3)
+
+    for ev in evidence_list:
+        ev.evidence_score = compute_evidence_score(
+            ev.similarity,
+            ev.support_score,
+            ev.source_trust
+        )
+
+    evidence_list.sort(
+        key=lambda x: x.evidence_score if x.evidence_score else 0,
+        reverse=True
+    )
 
     return evidence_list
 
@@ -129,14 +159,5 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
 
     except Exception as e:
         print("DDGS ERROR:", e)
-
-    evidence_list.sort(
-        key=lambda x: (
-            x.similarity *
-            (x.support_score if x.support_score else 1) *
-            (x.source_trust if x.source_trust else 0.5)
-        ),
-        reverse=True
-    )
 
     return evidence_list[:top_k]
