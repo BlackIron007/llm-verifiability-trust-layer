@@ -4,6 +4,7 @@ from app.schemas.evidence import Evidence
 import nltk
 from nltk.tokenize import sent_tokenize
 from ddgs import DDGS
+from app.services.nli_service import check_claim_evidence_support
 
 
 def best_sentence_match(claim_text: str, paragraph: str):
@@ -33,11 +34,13 @@ def best_sentence_match(claim_text: str, paragraph: str):
 def retrieve_evidence(claim_text: str, top_k: int = 3):
     evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
 
-    if not evidence_list:
-        return retrieve_ddgs_evidence(claim_text, top_k)
+    if not evidence_list or max(e.similarity for e in evidence_list) < 0.4:
+        evidence_list = retrieve_ddgs_evidence(claim_text, top_k)
 
-    if max(e.similarity for e in evidence_list) < 0.4:
-        return retrieve_ddgs_evidence(claim_text, top_k)
+    for ev in evidence_list:
+        label, score = check_claim_evidence_support(claim_text, ev.evidence)
+        ev.support_label = label
+        ev.support_score = round(score, 3)
 
     return evidence_list
 

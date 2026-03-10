@@ -50,27 +50,39 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     question = request.question
     answer = request.answer
+    
+    claims = extract_claims(answer)
+    classified_claims = [classify_claim(c) for c in claims]
+    scored_claims = [assign_baseline_risk(c) for c in classified_claims]
+    refined_claims = [refine_verifiability(c) for c in scored_claims]
 
     relevance_score = compute_qa_relevance(question, answer)
 
-    analysis = analyze_text(AnalysisRequest(text=answer))
-
-    for claim in analysis.claims:
+    for claim in refined_claims:
         try:
             claim.evidence = retrieve_evidence(claim.text)
-        except Exception:
+        except Exception as e:
+            print("Evidence retrieval error:", e)
             claim.evidence = []
         
+        contradictions = [
+            ev for ev in claim.evidence
+            if ev.support_label == "contradicts" and ev.support_score > 0.7
+        ]
+
+        if contradictions:
+            claim.verifiability_score = 1.0
+            claim.risk_level = RiskLevel.HIGH
+
         is_consistent, sim = check_question_claim_consistency(question, claim.text)
         claim.qa_consistent = is_consistent
         claim.qa_similarity = round(sim, 3)
 
         if not is_consistent:
             claim.verifiability_score = 1.0
-            claim.risk_level = RiskLevel.high
-            claim.evidence = []
+            claim.risk_level = RiskLevel.HIGH
     
-    epistemic_trust = compute_overall_trust_score(analysis.claims)
+    epistemic_trust = compute_overall_trust_score(refined_claims)
     epistemic_risk = 1 - epistemic_trust
 
     final_trust_score = round(relevance_score * epistemic_trust, 3)
@@ -83,7 +95,7 @@ def verify_llm_response(request: LLMVerificationRequest):
 
     return AnalysisResponse(
         original_text=answer,
-        claims=analysis.claims,
+        claims=refined_claims,
         overall_trust_score=final_trust_score,
         signals=signals,
         message="LLM response verification completed."

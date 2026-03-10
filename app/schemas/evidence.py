@@ -7,3 +7,5 @@ class Evidence(BaseModel):
     url: Optional[str]
     evidence: str
     similarity: float
+    support_label: str | None = None
+    support_score: float | None = None
