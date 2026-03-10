@@ -5,6 +5,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 from ddgs import DDGS
 from app.services.nli_service import check_claim_evidence_support
+from app.services.source_trust_service import compute_source_trust
 
 
 def best_sentence_match(claim_text: str, paragraph: str):
@@ -71,7 +72,8 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                             title=page.title,
                             url=page.url,
                             evidence=best_sentence,
-                            similarity=round(similarity, 3)
+                            similarity=round(similarity, 3),
+                            source_trust=compute_source_trust(page.url)
                         )
                     )
 
@@ -89,6 +91,13 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
 def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
     evidence_list = []
 
+    BLOCKED_DOMAINS = [
+        "maps.google",
+        "google.ru/maps",
+        "youtube.com",
+        "pinterest.com"
+    ]
+
     try:
         with DDGS() as ddgs:
             results = list(ddgs.text(claim_text, max_results=top_k))
@@ -96,6 +105,8 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
             for r in results:
                 title = r.get("title", "")
                 url = r.get("href", "")
+                if any(b in url for b in BLOCKED_DOMAINS):
+                    continue
 
                 snippet = r.get("body") or r.get("snippet") or ""
 
@@ -111,13 +122,21 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
                             title=title,
                             url=url,
                             evidence=best_sentence,
-                            similarity=round(similarity, 3)
+                            similarity=round(similarity, 3),
+                            source_trust=compute_source_trust(url)
                         )
                     )
 
     except Exception as e:
         print("DDGS ERROR:", e)
 
-    evidence_list.sort(key=lambda x: x.similarity, reverse=True)
+    evidence_list.sort(
+        key=lambda x: (
+            x.similarity *
+            (x.support_score if x.support_score else 1) *
+            (x.source_trust if x.source_trust else 0.5)
+        ),
+        reverse=True
+    )
 
     return evidence_list[:top_k]

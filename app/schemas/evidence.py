@@ -9,3 +9,4 @@ class Evidence(BaseModel):
     similarity: float
     support_label: str | None = None
     support_score: float | None = None
+    source_trust: float | None = None
