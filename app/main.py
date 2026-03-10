@@ -10,6 +10,7 @@ from app.services.relevance_service import compute_qa_relevance
 from app.services.evidence_service import retrieve_evidence
 from app.modules.consistency_checker import check_question_claim_consistency
 from app.schemas.claim import RiskLevel
+from app.modules.intra_answer_checker import detect_internal_contradictions
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -83,6 +84,11 @@ def verify_llm_response(request: LLMVerificationRequest):
             claim.risk_level = RiskLevel.HIGH
     
     epistemic_trust = compute_overall_trust_score(refined_claims)
+    contradictions = detect_internal_contradictions(refined_claims)
+
+    if contradictions:
+        epistemic_trust *= 0.5
+
     epistemic_risk = 1 - epistemic_trust
 
     final_trust_score = round(relevance_score * epistemic_trust, 3)
@@ -96,6 +102,7 @@ def verify_llm_response(request: LLMVerificationRequest):
     return AnalysisResponse(
         original_text=answer,
         claims=refined_claims,
+        contradictions=contradictions,
         overall_trust_score=final_trust_score,
         signals=signals,
         message="LLM response verification completed."

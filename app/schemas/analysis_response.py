@@ -9,3 +9,4 @@ class AnalysisResponse(BaseModel):
     overall_trust_score: float
     message: str
     signals: dict
+    contradictions: list | None = None
