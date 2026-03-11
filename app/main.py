@@ -12,6 +12,7 @@ from app.modules.consistency_checker import check_question_claim_consistency
 from app.schemas.claim import RiskLevel
 from app.modules.intra_answer_checker import detect_internal_contradictions
 from app.modules.evidence_aggregator import aggregate_evidence
+from app.modules.trust_calibrator import calibrate_claim_trust
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -74,6 +75,8 @@ def verify_llm_response(request: LLMVerificationRequest):
         if claim.contradiction_strength > 0.6:
             claim.verifiability_score = 1.0
             claim.risk_level = RiskLevel.HIGH
+            
+        claim = calibrate_claim_trust(claim)
 
         contradictions = [
             ev for ev in claim.evidence
