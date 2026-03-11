@@ -28,3 +28,5 @@ class Claim(BaseModel):
     evidence: List[Evidence] = []
     qa_consistent: bool | None = None
     qa_similarity: float | None = None
+    support_strength: float | None = None
+    contradiction_strength: float | None = None

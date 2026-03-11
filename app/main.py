@@ -11,6 +11,7 @@ from app.services.evidence_service import retrieve_evidence
 from app.modules.consistency_checker import check_question_claim_consistency
 from app.schemas.claim import RiskLevel
 from app.modules.intra_answer_checker import detect_internal_contradictions
+from app.modules.evidence_aggregator import aggregate_evidence
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
@@ -65,7 +66,15 @@ def verify_llm_response(request: LLMVerificationRequest):
         except Exception as e:
             print("Evidence retrieval error:", e)
             claim.evidence = []
-        
+
+        agg = aggregate_evidence(claim.evidence)
+        claim.support_strength = agg["support_strength"]
+        claim.contradiction_strength = agg["contradiction_strength"]
+
+        if claim.contradiction_strength > 0.6:
+            claim.verifiability_score = 1.0
+            claim.risk_level = RiskLevel.HIGH
+
         contradictions = [
             ev for ev in claim.evidence
             if ev.support_label == "contradicts" and ev.support_score > 0.7
