@@ -6,6 +6,7 @@ from nltk.tokenize import sent_tokenize
 from ddgs import DDGS
 from app.services.nli_service import check_claim_evidence_support
 from app.services.source_trust_service import compute_source_trust
+from app.modules.retrieval_controller import evidence_is_weak, refine_query
 
 
 def compute_evidence_score(similarity, support_score, source_trust):
@@ -53,20 +54,30 @@ def best_sentence_match(claim_text: str, paragraph: str):
 def retrieve_evidence(claim_text: str, top_k: int = 3):
     evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
 
-    if not evidence_list or max(e.similarity for e in evidence_list) < 0.4:
-        evidence_list = retrieve_ddgs_evidence(claim_text, top_k)
-
     for ev in evidence_list:
         label, score = check_claim_evidence_support(claim_text, ev.evidence)
         ev.support_label = label
         ev.support_score = round(score, 3)
-
-    for ev in evidence_list:
         ev.evidence_score = compute_evidence_score(
             ev.similarity,
             ev.support_score,
             ev.source_trust
         )
+
+    if evidence_is_weak(evidence_list):
+        print("Iterative retrieval triggered")
+        refined_query = refine_query(claim_text)
+        ddgs_evidence = retrieve_ddgs_evidence(refined_query, top_k)
+
+        if ddgs_evidence:
+            evidence_list = ddgs_evidence
+            for ev in evidence_list:
+                label, score = check_claim_evidence_support(claim_text, ev.evidence)
+                ev.support_label = label
+                ev.support_score = round(score, 3)
+                ev.evidence_score = compute_evidence_score(
+                    ev.similarity, ev.support_score, ev.source_trust
+                )
 
     evidence_list.sort(
         key=lambda x: x.evidence_score if x.evidence_score else 0,
