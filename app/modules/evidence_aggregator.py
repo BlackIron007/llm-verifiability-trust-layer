@@ -12,14 +12,23 @@ def aggregate_evidence(evidence_list):
     support_total = 0
     contradiction_total = 0
 
+    CONFIDENCE_THRESHOLD = 0.6
+
     for ev in evidence_list:
 
-        score = (ev.support_score or 0) * (ev.source_trust or 0.5)
+        support_score = ev.support_score or 0
 
-        if ev.support_label == "supports":
+        if support_score < CONFIDENCE_THRESHOLD:
+            label = "neutral"
+        else:
+            label = ev.support_label
+
+        score = support_score * (ev.source_trust or 0.5)
+
+        if label == "supports":
             support_total += score
 
-        elif ev.support_label == "contradicts":
+        elif label == "contradicts":
             contradiction_total += score
 
     total = support_total + contradiction_total

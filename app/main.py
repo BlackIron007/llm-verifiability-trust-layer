@@ -1,9 +1,11 @@
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
+from app.startup import download_nltk_data
 from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
 from app.modules.claim_extractor import extract_claims
 from app.modules.claim_classifier import classify_claim
-from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_score
+from app.modules.risk_scorer import assign_baseline_risk, compute_overall_trust_score, compute_risk_level
 from app.modules.verifiability_engine import refine_verifiability
 from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
@@ -13,11 +15,18 @@ from app.schemas.claim import RiskLevel
 from app.modules.intra_answer_checker import detect_internal_contradictions
 from app.modules.evidence_aggregator import aggregate_evidence
 from app.modules.trust_calibrator import calibrate_claim_trust
+from app.modules.evidence_summarizer import summarize_evidence
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    download_nltk_data()
+    yield
 
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
     description="Middleware system for claim extraction and verifiability analysis",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan
 )
 
 
@@ -64,6 +73,7 @@ def verify_llm_response(request: LLMVerificationRequest):
     for claim in refined_claims:
         try:
             claim.evidence = retrieve_evidence(claim.text)
+            claim.evidence = summarize_evidence(claim.evidence)
         except Exception as e:
             print("Evidence retrieval error:", e)
             claim.evidence = []
@@ -71,29 +81,24 @@ def verify_llm_response(request: LLMVerificationRequest):
         agg = aggregate_evidence(claim.evidence)
         claim.support_strength = agg["support_strength"]
         claim.contradiction_strength = agg["contradiction_strength"]
-
-        if claim.contradiction_strength > 0.6:
-            claim.verifiability_score = 1.0
-            claim.risk_level = RiskLevel.HIGH
-            
-        claim = calibrate_claim_trust(claim)
-
-        contradictions = [
-            ev for ev in claim.evidence
-            if ev.support_label == "contradicts" and ev.support_score > 0.7
-        ]
-
-        if contradictions:
-            claim.verifiability_score = 1.0
-            claim.risk_level = RiskLevel.HIGH
+        
+        # Apply a penalty based on contradiction strength from aggregated evidence.
+        # This is more robust than setting the score to 1.0 directly.
+        if claim.contradiction_strength > 0.2:
+            penalty = claim.contradiction_strength * 0.5
+            claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
 
         is_consistent, sim = check_question_claim_consistency(question, claim.text)
         claim.qa_consistent = is_consistent
         claim.qa_similarity = round(sim, 3)
 
+        claim = calibrate_claim_trust(claim)
+
         if not is_consistent:
             claim.verifiability_score = 1.0
-            claim.risk_level = RiskLevel.HIGH
+        
+        # Final risk level computation after all adjustments
+        claim.risk_level = compute_risk_level(claim.verifiability_score)
     
     epistemic_trust = compute_overall_trust_score(refined_claims)
     contradictions = detect_internal_contradictions(refined_claims)

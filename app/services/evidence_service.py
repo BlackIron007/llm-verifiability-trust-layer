@@ -51,9 +51,8 @@ def best_sentence_match(claim_text: str, paragraph: str):
     return best_sentence, best_score
 
 
-def retrieve_evidence(claim_text: str, top_k: int = 3):
-    evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
-
+def _score_evidence_list(claim_text: str, evidence_list: list[Evidence]):
+    """Scores a list of evidence items against a claim."""
     for ev in evidence_list:
         label, score = check_claim_evidence_support(claim_text, ev.evidence)
         ev.support_label = label
@@ -63,6 +62,12 @@ def retrieve_evidence(claim_text: str, top_k: int = 3):
             ev.support_score,
             ev.source_trust
         )
+    return evidence_list
+
+
+def retrieve_evidence(claim_text: str, top_k: int = 3):
+    evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
+    evidence_list = _score_evidence_list(claim_text, evidence_list)
 
     if evidence_is_weak(evidence_list):
         print("Iterative retrieval triggered")
@@ -70,14 +75,7 @@ def retrieve_evidence(claim_text: str, top_k: int = 3):
         ddgs_evidence = retrieve_ddgs_evidence(refined_query, top_k)
 
         if ddgs_evidence:
-            evidence_list = ddgs_evidence
-            for ev in evidence_list:
-                label, score = check_claim_evidence_support(claim_text, ev.evidence)
-                ev.support_label = label
-                ev.support_score = round(score, 3)
-                ev.evidence_score = compute_evidence_score(
-                    ev.similarity, ev.support_score, ev.source_trust
-                )
+            evidence_list = _score_evidence_list(claim_text, ddgs_evidence)
 
     evidence_list.sort(
         key=lambda x: x.evidence_score if x.evidence_score else 0,
