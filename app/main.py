@@ -16,6 +16,7 @@ from app.modules.intra_answer_checker import detect_internal_contradictions
 from app.modules.evidence_aggregator import aggregate_evidence
 from app.modules.trust_calibrator import calibrate_claim_trust
 from app.modules.evidence_summarizer import summarize_evidence
+from app.modules.confidence_explainer import generate_confidence_explanation
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -82,8 +83,6 @@ def verify_llm_response(request: LLMVerificationRequest):
         claim.support_strength = agg["support_strength"]
         claim.contradiction_strength = agg["contradiction_strength"]
         
-        # Apply a penalty based on contradiction strength from aggregated evidence.
-        # This is more robust than setting the score to 1.0 directly.
         if claim.contradiction_strength > 0.2:
             penalty = claim.contradiction_strength * 0.5
             claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
@@ -94,10 +93,11 @@ def verify_llm_response(request: LLMVerificationRequest):
 
         claim = calibrate_claim_trust(claim)
 
+        claim.confidence_explanation = generate_confidence_explanation(claim)
+
         if not is_consistent:
-            claim.verifiability_score = 1.0
+            claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + 0.6)
         
-        # Final risk level computation after all adjustments
         claim.risk_level = compute_risk_level(claim.verifiability_score)
     
     epistemic_trust = compute_overall_trust_score(refined_claims)

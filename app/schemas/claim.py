@@ -30,3 +30,4 @@ class Claim(BaseModel):
     qa_similarity: float | None = None
     support_strength: float | None = None
     contradiction_strength: float | None = None
+    confidence_explanation: list[str] | None = None

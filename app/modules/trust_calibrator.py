@@ -16,6 +16,5 @@ def calibrate_claim_trust(claim):
 
     elif claim.claim_type == "opinion":
         claim.verifiability_score *= 0.5
-        claim.risk_level = RiskLevel.LOW
 
     return claim
