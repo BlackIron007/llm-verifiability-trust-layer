@@ -17,6 +17,7 @@ from app.modules.evidence_aggregator import aggregate_evidence
 from app.modules.trust_calibrator import calibrate_claim_trust
 from app.modules.evidence_summarizer import summarize_evidence
 from app.modules.confidence_explainer import generate_confidence_explanation
+from app.schemas.batch_request import BatchVerificationRequest
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -124,3 +125,21 @@ def verify_llm_response(request: LLMVerificationRequest):
         signals=signals,
         message="LLM response verification completed."
     )
+    
+@app.post("/verify_batch")
+def verify_batch(request: BatchVerificationRequest):
+
+    results = []
+
+    for item in request.items:
+
+        single_request = LLMVerificationRequest(
+            question=item.question,
+            answer=item.answer
+        )
+
+        result = verify_llm_response(single_request)
+
+        results.append(result)
+
+    return {"results": results}
