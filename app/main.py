@@ -1,6 +1,15 @@
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import logging
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+
+from transformers.utils import logging as hf_logging
+hf_logging.set_verbosity_error()
+
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from app.startup import download_nltk_data
+from app.startup import check_local_nltk_data
 from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
 from app.modules.claim_extractor import extract_claims
@@ -18,10 +27,14 @@ from app.modules.trust_calibrator import calibrate_claim_trust
 from app.modules.evidence_summarizer import summarize_evidence
 from app.modules.confidence_explainer import generate_confidence_explanation
 from app.schemas.batch_request import BatchVerificationRequest
+from nltk.tokenize import sent_tokenize
+from fastapi.responses import StreamingResponse
+import json
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    download_nltk_data()
+    check_local_nltk_data()
     yield
 
 app = FastAPI(
@@ -125,7 +138,40 @@ def verify_llm_response(request: LLMVerificationRequest):
         signals=signals,
         message="LLM response verification completed."
     )
-    
+
+async def stream_verification(question: str, answer: str):
+    """
+    Splits an answer into sentences, verifies each sentence, and streams the results.
+    """
+    sentences = sent_tokenize(answer)
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+
+        request = LLMVerificationRequest(
+            question=question,
+            answer=sentence
+        )
+
+        result = verify_llm_response(request)
+
+        yield f"data: {json.dumps(result.dict())}\n\n"
+        await asyncio.sleep(0.1)
+
+@app.post("/verify_stream")
+async def verify_stream(request: LLMVerificationRequest):
+    """
+    Accepts a question and an answer, and streams the verification results
+    for each sentence in the answer.
+    """
+    generator = stream_verification(request.question, request.answer)
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream"
+    )
+
 @app.post("/verify_batch")
 def verify_batch(request: BatchVerificationRequest):
 

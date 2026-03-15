@@ -1,13 +1,24 @@
 import nltk
-import logging
+import os
+from nltk.tokenize import sent_tokenize
 
-def download_nltk_data():
+APP_DIR = os.path.dirname(__file__)
+LOCAL_NLTK_DATA = os.path.join(APP_DIR, 'nltk_data')
+
+nltk.data.path.insert(0, LOCAL_NLTK_DATA)
+
+def check_local_nltk_data():
     """
-    Downloads the NLTK 'punkt' package if it is not found.
+    Verifies that the local NLTK 'punkt' data is available in the project.
+    If not, it raises a clear error with instructions for the developer.
     """
     try:
-        nltk.data.find('tokenizers/punkt')
+        sent_tokenize("This is a test sentence. It ensures all data is loaded.")
     except LookupError:
-        logging.info("NLTK 'punkt' package not found. Downloading...")
-        nltk.download('punkt', quiet=True)
-        logging.info("NLTK 'punkt' package downloaded.")
+        raise LookupError(
+            "\n" + "*"*70 +
+            "\nFATAL ERROR: The required NLTK 'punkt' data is missing or incomplete." +
+            "\n\nPlease run the following command from the project's root directory to download it:" +
+            "\n\n  python download_data.py\n" +
+            "*"*70
+        )
