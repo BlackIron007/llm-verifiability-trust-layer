@@ -1,8 +1,10 @@
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 import logging
 logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 from transformers.utils import logging as hf_logging
 hf_logging.set_verbosity_error()

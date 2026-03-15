@@ -15,3 +15,5 @@ __pycache__/
 
 # Database files
 *.db
+
+nltk_data/
