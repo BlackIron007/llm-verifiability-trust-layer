@@ -43,6 +43,7 @@ from app.security.api_key import verify_api_key
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
+from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
 
 class LimitUploadSize(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -142,8 +143,16 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
 
     for claim in refined_claims:
         try:
-            claim.evidence = retrieve_evidence(claim.text)
-            claim.evidence = summarize_evidence(claim.evidence)
+            cached = get_cached_evidence(claim.text)
+
+            if cached is not None:
+                logger.info(f"Cache hit for claim: {claim.text}")
+                claim.evidence = cached
+            else:
+                logger.info(f"Cache miss for claim: {claim.text}")
+                claim.evidence = retrieve_evidence(claim.text)
+                claim.evidence = summarize_evidence(claim.evidence)
+                set_cached_evidence(claim.text, claim.evidence)
         except Exception as e:
             logger.error(f"Evidence retrieval error: {e}")
             claim.evidence = []
