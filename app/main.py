@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from contextlib import asynccontextmanager
+from concurrent.futures import ThreadPoolExecutor
 from app.startup import check_local_nltk_data
 from app.schemas.analysis_request import AnalysisRequest
 from app.schemas.analysis_response import AnalysisResponse
@@ -132,6 +133,48 @@ def analyze_text(
         message="Full pipeline completed with verifiability refinement."
     )
 
+def _process_claim(claim, question):
+    """
+    Process a single claim: evidence retrieval, aggregation,
+    trust calibration, and scoring. This function is designed to be run in parallel.
+    """
+    try:
+        cached = get_cached_evidence(claim.text)
+
+        if cached is not None:
+            logger.info(f"Cache hit for claim: {claim.text}")
+            claim.evidence = cached
+        else:
+            logger.info(f"Cache miss for claim: {claim.text}")
+            claim.evidence = retrieve_evidence(claim.text)
+            claim.evidence = summarize_evidence(claim.evidence)
+            set_cached_evidence(claim.text, claim.evidence)
+    except Exception as e:
+        logger.error(f"Evidence retrieval error: {e}")
+        claim.evidence = []
+
+    agg = aggregate_evidence(claim.evidence)
+    claim.support_strength = agg["support_strength"]
+    claim.contradiction_strength = agg["contradiction_strength"]
+    
+    if claim.contradiction_strength > 0.2:
+        penalty = claim.contradiction_strength * 0.5
+        claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
+
+    is_consistent, sim = check_question_claim_consistency(question, claim.text)
+    claim.qa_consistent = is_consistent
+    claim.qa_similarity = round(sim, 3)
+
+    claim = calibrate_claim_trust(claim)
+
+    claim.confidence_explanation = generate_confidence_explanation(claim)
+
+    if not is_consistent:
+        claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + 0.6)
+    
+    claim.risk_level = compute_risk_level(claim.verifiability_score)
+    return claim
+
 def _core_verify(question: str, answer: str) -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
@@ -141,43 +184,12 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
 
     relevance_score = compute_qa_relevance(question, answer)
 
-    for claim in refined_claims:
-        try:
-            cached = get_cached_evidence(claim.text)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        processed_claims = list(
+            executor.map(lambda c: _process_claim(c, question), refined_claims)
+        )
+    refined_claims = processed_claims
 
-            if cached is not None:
-                logger.info(f"Cache hit for claim: {claim.text}")
-                claim.evidence = cached
-            else:
-                logger.info(f"Cache miss for claim: {claim.text}")
-                claim.evidence = retrieve_evidence(claim.text)
-                claim.evidence = summarize_evidence(claim.evidence)
-                set_cached_evidence(claim.text, claim.evidence)
-        except Exception as e:
-            logger.error(f"Evidence retrieval error: {e}")
-            claim.evidence = []
-
-        agg = aggregate_evidence(claim.evidence)
-        claim.support_strength = agg["support_strength"]
-        claim.contradiction_strength = agg["contradiction_strength"]
-        
-        if claim.contradiction_strength > 0.2:
-            penalty = claim.contradiction_strength * 0.5
-            claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
-
-        is_consistent, sim = check_question_claim_consistency(question, claim.text)
-        claim.qa_consistent = is_consistent
-        claim.qa_similarity = round(sim, 3)
-
-        claim = calibrate_claim_trust(claim)
-
-        claim.confidence_explanation = generate_confidence_explanation(claim)
-
-        if not is_consistent:
-            claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + 0.6)
-        
-        claim.risk_level = compute_risk_level(claim.verifiability_score)
-    
     epistemic_trust = compute_overall_trust_score(refined_claims)
     contradictions = detect_internal_contradictions(refined_claims)
 
