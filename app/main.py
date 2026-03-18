@@ -40,12 +40,14 @@ from app.modules.trust_calibrator import calibrate_claim_trust
 from app.modules.evidence_summarizer import summarize_evidence
 from app.modules.confidence_explainer import generate_confidence_explanation
 from app.schemas.batch_request import BatchVerificationRequest
+from app.services.nli_service import check_claim_evidence_support_batch
 from nltk.tokenize import sent_tokenize
 from app.api_key import verify_api_key
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
+from collections import defaultdict
 
 class LimitUploadSize(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -133,10 +135,26 @@ def analyze_text(
         message="Full pipeline completed with verifiability refinement."
     )
 
-def _process_claim(claim, question):
+def _fetch_evidence(search_query: str) -> list:
     """
-    Process a single claim: evidence retrieval, aggregation,
-    trust calibration, and scoring. This function is designed to be run in parallel.
+    A helper function designed to be run in a thread pool.
+    It retrieves evidence for a single search query, utilizing the global cache.
+    """
+    cached = get_cached_evidence(search_query)
+    if cached is not None:
+        logger.info(f"Global cache hit for query: '{search_query}'")
+        return cached
+    
+    logger.info(f"Cache miss for query: '{search_query}'")
+    evidence = retrieve_evidence(search_query)
+    evidence = summarize_evidence(evidence)
+    set_cached_evidence(search_query, evidence)
+    return evidence
+
+def _finalize_claim_processing(claim, question):
+    """
+    Takes a claim with its evidence already attached and performs the final
+    aggregation, scoring, and calibration steps. Designed to be run in parallel.
     """
     if claim.claim_type == ClaimType.OPINION:
         claim.evidence = []
@@ -154,21 +172,6 @@ def _process_claim(claim, question):
             "Opinions are not objectively verifiable."
         ]
         return claim
-
-    try:
-        cached = get_cached_evidence(claim.text)
-
-        if cached is not None:
-            logger.info(f"Cache hit for claim: {claim.text}")
-            claim.evidence = cached
-        else:
-            logger.info(f"Cache miss for claim: {claim.text}")
-            claim.evidence = retrieve_evidence(claim.text)
-            claim.evidence = summarize_evidence(claim.evidence)
-            set_cached_evidence(claim.text, claim.evidence)
-    except Exception as e:
-        logger.error(f"Evidence retrieval error: {e}")
-        claim.evidence = []
 
     agg = aggregate_evidence(claim.evidence)
     claim.support_strength = agg["support_strength"]
@@ -195,15 +198,70 @@ def _process_claim(claim, question):
 def _core_verify(question: str, answer: str) -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
-    classified_claims = [classify_claim(c) for c in claims]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        classified_claims = list(executor.map(classify_claim, claims))
+        
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
 
     relevance_score = compute_qa_relevance(question, answer)
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    claims_by_text = defaultdict(list)
+    unique_claim_texts = set()
+    for claim in refined_claims:
+        if claim.claim_type != ClaimType.OPINION:
+            claims_by_text[claim.text].append(claim)
+            unique_claim_texts.add(claim.text)
+
+    all_unique_queries = list(unique_claim_texts)
+
+    evidence_map = {}
+    if all_unique_queries:
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            evidence_results = list(executor.map(_fetch_evidence, all_unique_queries))
+        evidence_map = dict(zip(all_unique_queries, evidence_results))
+
+    for text, claims_group in claims_by_text.items():
+        evidence = evidence_map.get(text, [])[:2]
+        for claim in claims_group:
+            claim.evidence = evidence
+
+    nli_cache = {} 
+    nli_batch_pairs = []
+    nli_batch_targets = []
+
+    for claim in refined_claims:
+        if claim.claim_type == ClaimType.OPINION:
+            continue
+
+        evidence_to_process = claim.evidence[:1]
+
+        for ev in evidence_to_process:
+            if (ev.similarity or 0) > 0.7 and (ev.source_trust or 0) >= 0.9:
+                ev.support_label = "supports"
+                ev.support_score = 0.95
+                continue
+
+            cache_key = (claim.text, ev.evidence)
+            if cache_key in nli_cache:
+                ev.support_label, ev.support_score = nli_cache[cache_key]
+                continue
+            
+            nli_batch_pairs.append((claim.text, ev.evidence))
+            nli_batch_targets.append(ev)
+
+    if nli_batch_pairs:
+        batch_results = check_claim_evidence_support_batch(nli_batch_pairs)
+        for i, (label, score) in enumerate(batch_results):
+            ev = nli_batch_targets[i]
+            ev.support_label = label
+            ev.support_score = score
+            cache_key = (nli_batch_pairs[i][0], nli_batch_pairs[i][1])
+            nli_cache[cache_key] = (label, score)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
         processed_claims = list(
-            executor.map(lambda c: _process_claim(c, question), refined_claims)
+            executor.map(lambda c: _finalize_claim_processing(c, question), refined_claims)
         )
     refined_claims = processed_claims
 

@@ -3,29 +3,6 @@ from app.services.embedding_service import compute_similarity
 from app.schemas.evidence import Evidence
 import nltk
 from nltk.tokenize import sent_tokenize
-from ddgs import DDGS
-from app.services.nli_service import check_claim_evidence_support
-from app.services.source_trust_service import compute_source_trust
-from app.modules.retrieval_controller import evidence_is_weak, refine_query
-
-
-def compute_evidence_score(similarity, support_score, source_trust):
-    """
-    Compute a final ranking score for evidence.
-    """
-
-    similarity = similarity or 0
-    support_score = support_score or 0
-    source_trust = source_trust or 0
-
-    score = (
-        0.4 * similarity +
-        0.4 * support_score +
-        0.2 * source_trust
-    )
-
-    return round(score, 3)
-
 
 def best_sentence_match(claim_text: str, paragraph: str):
     """
@@ -51,34 +28,22 @@ def best_sentence_match(claim_text: str, paragraph: str):
     return best_sentence, best_score
 
 
-def _score_evidence_list(claim_text: str, evidence_list: list[Evidence]):
-    """Scores a list of evidence items against a claim."""
-    for ev in evidence_list:
-        label, score = check_claim_evidence_support(claim_text, ev.evidence)
-        ev.support_label = label
-        ev.support_score = round(score, 3)
-        ev.evidence_score = compute_evidence_score(
-            ev.similarity,
-            ev.support_score,
-            ev.source_trust
-        )
-    return evidence_list
+from ddgs import DDGS
+from app.services.source_trust_service import compute_source_trust
+from app.modules.retrieval_controller import evidence_is_weak, refine_query
 
 
 def retrieve_evidence(claim_text: str, top_k: int = 3):
     evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
-    evidence_list = _score_evidence_list(claim_text, evidence_list)
 
     if evidence_is_weak(evidence_list):
         print("Iterative retrieval triggered")
         refined_query = refine_query(claim_text)
         ddgs_evidence = retrieve_ddgs_evidence(refined_query, top_k)
-
-        if ddgs_evidence:
-            evidence_list = _score_evidence_list(claim_text, ddgs_evidence)
+        evidence_list.extend(ddgs_evidence)
 
     evidence_list.sort(
-        key=lambda x: x.evidence_score if x.evidence_score else 0,
+        key=lambda x: (x.similarity or 0) * 0.7 + (x.source_trust or 0) * 0.3,
         reverse=True
     )
 

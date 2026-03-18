@@ -30,6 +30,9 @@ def aggregate_evidence(evidence_list):
 
         elif label == "contradicts":
             contradiction_total += score
+        
+        elif label == "neutral" and (ev.similarity or 0) > 0.7:
+            support_total += score * 0.3
 
     total = support_total + contradiction_total
 

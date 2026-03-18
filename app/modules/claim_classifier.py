@@ -2,12 +2,25 @@ from app.schemas.claim import Claim, ClaimType
 from app.services.model_client import ModelClient
 import json
 import re
+from app.services.claim_cache import get_cached_classification, set_cached_classification
+import logging
+
+logger = logging.getLogger("verifier")
 
 def classify_claim(claim: Claim) -> Claim:
     """
     Classifies a claim into HARD_FACT, SOFT_FACT, OPINION, or PREDICTION.
     Updates and returns the Claim object.
+    Utilizes a cache to avoid re-classifying known claims.
     """
+
+    cached_type = get_cached_classification(claim.text)
+    if cached_type is not None:
+        logger.info(f"Claim classification cache hit for: '{claim.text}'")
+        claim.claim_type = cached_type
+        return claim
+    
+    logger.info(f"Claim classification cache miss for: '{claim.text}'")
 
     prompt = f"""
     Classify the following claim into one of these categories:
@@ -43,5 +56,7 @@ def classify_claim(claim: Claim) -> Claim:
         claim.claim_type = ClaimType(claim_type_str)
     except Exception:
         claim.claim_type = ClaimType.SOFT_FACT
+
+    set_cached_classification(claim.text, claim.claim_type)
 
     return claim

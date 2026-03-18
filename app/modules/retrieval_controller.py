@@ -6,9 +6,12 @@ def evidence_is_weak(evidence_list):
     if not evidence_list:
         return True
 
-    top_score = max((e.evidence_score or 0) for e in evidence_list)
+    top_score = max(
+        (e.similarity or 0) * 0.7 + (e.source_trust or 0) * 0.3
+        for e in evidence_list
+    )
 
-    if top_score < 0.6:
+    if top_score < 0.55:
         return True
 
     return False
