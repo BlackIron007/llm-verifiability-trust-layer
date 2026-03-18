@@ -5,6 +5,7 @@ os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 import logging
 logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("verifier")
@@ -32,7 +33,7 @@ from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
 from app.services.evidence_service import retrieve_evidence
 from app.modules.consistency_checker import check_question_claim_consistency
-from app.schemas.claim import RiskLevel
+from app.schemas.claim import RiskLevel, ClaimType
 from app.modules.intra_answer_checker import detect_internal_contradictions
 from app.modules.evidence_aggregator import aggregate_evidence
 from app.modules.trust_calibrator import calibrate_claim_trust
@@ -40,7 +41,7 @@ from app.modules.evidence_summarizer import summarize_evidence
 from app.modules.confidence_explainer import generate_confidence_explanation
 from app.schemas.batch_request import BatchVerificationRequest
 from nltk.tokenize import sent_tokenize
-from app.security.api_key import verify_api_key
+from app.api_key import verify_api_key
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
@@ -97,7 +98,6 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 
 router = APIRouter(
     prefix="/api/v1",
-    dependencies=[Depends(verify_api_key)]
 )
 
 @app.get("/")
@@ -105,26 +105,26 @@ router = APIRouter(
 def root(request: Request):
     return {"message": "LLM Verifiability Trust Layer API is running"}
 
-@router.post("/analyze", response_model=AnalysisResponse)
+@router.post("/analyze", response_model=AnalysisResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("15/minute")
 def analyze_text(
-    request: AnalysisRequest,
-    http_request: Request
+    payload: AnalysisRequest,
+    request: Request
 ):
     """
     Extracts, classifies, and scores claims from a given text.
     """
-    client_ip = http_request.client.host if http_request.client else "unknown"
+    client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Analyze request from IP: {client_ip}")
 
-    claims = extract_claims(request.text)
+    claims = extract_claims(payload.text)
     classified_claims = [classify_claim(c) for c in claims]
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
     overall_score = compute_overall_trust_score(refined_claims)
 
     return AnalysisResponse(
-        original_text=request.text,
+        original_text=payload.text,
         claims=refined_claims,
         overall_trust_score=overall_score,
         signals={
@@ -138,6 +138,23 @@ def _process_claim(claim, question):
     Process a single claim: evidence retrieval, aggregation,
     trust calibration, and scoring. This function is designed to be run in parallel.
     """
+    if claim.claim_type == ClaimType.OPINION:
+        claim.evidence = []
+        claim.support_strength = 0
+        claim.contradiction_strength = 0
+        claim.qa_consistent = True
+        claim.qa_similarity = 1.0
+
+        claim.verifiability_score = 0.1
+        claim.risk_level = RiskLevel.LOW
+
+        claim.confidence_explanation = [
+            "Claim classified as opinion.",
+            "Fact verification skipped.",
+            "Opinions are not objectively verifiable."
+        ]
+        return claim
+
     try:
         cached = get_cached_evidence(claim.text)
 
@@ -191,6 +208,10 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
     refined_claims = processed_claims
 
     epistemic_trust = compute_overall_trust_score(refined_claims)
+
+    if refined_claims and all(c.claim_type == ClaimType.OPINION for c in refined_claims):
+        epistemic_trust *= 0.3
+
     contradictions = detect_internal_contradictions(refined_claims)
 
     if contradictions:
@@ -215,15 +236,15 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
         message="LLM response verification completed."
     )
 
-@router.post("/verify_llm_response", response_model=AnalysisResponse)
+@router.post("/verify_llm_response", response_model=AnalysisResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
 def verify_llm_response(
-    request: LLMVerificationRequest,
-    http_request: Request
+    payload: LLMVerificationRequest,
+    request: Request
 ):
-    client_ip = http_request.client.host if http_request.client else "unknown"
+    client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Verify LLM response request from IP: {client_ip}")
-    return _core_verify(request.question, request.answer)
+    return _core_verify(payload.question, payload.answer)
 
 async def stream_verification(question: str, answer: str):
     """
@@ -241,36 +262,36 @@ async def stream_verification(question: str, answer: str):
         yield f"data: {json.dumps(result.dict())}\n\n"
         await asyncio.sleep(0.1)
 
-@router.post("/verify_stream")
+@router.post("/verify_stream", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
 async def verify_stream(
-    request: LLMVerificationRequest,
-    http_request: Request
+    payload: LLMVerificationRequest,
+    request: Request
 ):
     """
     Accepts a question and an answer, and streams the verification results
     for each sentence in the answer.
     """
-    client_ip = http_request.client.host if http_request.client else "unknown"
+    client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Verify stream request from IP: {client_ip}")
-    generator = stream_verification(request.question, request.answer)
+    generator = stream_verification(payload.question, payload.answer)
     return StreamingResponse(
         generator,
         media_type="text/event-stream"
     )
 
-@router.post("/verify_batch")
+@router.post("/verify_batch", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
 def verify_batch(
-    request: BatchVerificationRequest,
-    http_request: Request
+    payload: BatchVerificationRequest,
+    request: Request
 ):
-    client_ip = http_request.client.host if http_request.client else "unknown"
-    logger.info(f"Verify batch request from IP: {client_ip} with {len(request.items)} items")
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"Verify batch request from IP: {client_ip} with {len(payload.items)} items")
 
     results = []
 
-    for item in request.items:
+    for item in payload.items:
         result = _core_verify(item.question, item.answer)
         results.append(result)
 
