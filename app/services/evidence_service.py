@@ -67,9 +67,32 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                 page = wikipedia.page(title)
                 summary = page.summary
 
+                JUNK_WORD_GROUPS = [
+                    ["film", "movie", "motion picture"],
+                    ["album", "record"],
+                    ["song", "track"],
+                    ["book", "novel", "publication"],
+                    ["series", "show"],
+                    ["list of", "lists of"]
+                ]
+                
+                is_irrelevant_media = False
+                title_lower = page.title.lower()
+                claim_lower = claim_text.lower()
+
+                for group in JUNK_WORD_GROUPS:
+                    title_has_keyword = any(keyword in title_lower for keyword in group)
+                    if title_has_keyword:
+                        claim_has_keyword = any(keyword in claim_lower for keyword in group)
+                        if not claim_has_keyword:
+                            is_irrelevant_media = True
+                            break
+                if is_irrelevant_media:
+                    continue
+
                 best_sentence, similarity = best_sentence_match(claim_text, summary)
 
-                if similarity >= 0.4:
+                if similarity >= 0.6:
                     evidence_list.append(
                         Evidence(
                             source="Wikipedia",
@@ -119,7 +142,7 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
 
                 best_sentence, similarity = best_sentence_match(claim_text, snippet)
 
-                if similarity >= 0.30:
+                if similarity >= 0.5:
                     evidence_list.append(
                         Evidence(
                             source="DDGS",

@@ -16,12 +16,12 @@ def aggregate_evidence(evidence_list):
 
     for ev in evidence_list:
 
-        support_score = ev.support_score or 0
+        support_score = ev.support_score or 0.0
+        # Robustness: Treat a null label as "neutral" to ensure consistent processing.
+        label = ev.support_label or "neutral"
 
         if support_score < CONFIDENCE_THRESHOLD:
             label = "neutral"
-        else:
-            label = ev.support_label
 
         score = support_score * (ev.source_trust or 0.5)
 

@@ -66,9 +66,14 @@ class LimitUploadSize(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Handles application startup and shutdown events."""
     check_local_nltk_data()
+    logger.info("Application startup: Warming up models...")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, lambda: _fetch_evidence("United States"))
+    logger.info("Application startup: Models are warm and ready.")
     yield
-
+    
 app = FastAPI(
     title="LLM Verifiability & Trust Layer",
     description="Middleware system for claim extraction and verifiability analysis",
@@ -185,6 +190,11 @@ def _finalize_claim_processing(claim, question):
     claim.qa_consistent = is_consistent
     claim.qa_similarity = round(sim, 3)
 
+    if claim.support_strength > 0.9:
+        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.15)
+    elif claim.support_strength > 0.6:
+        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.05)
+
     claim = calibrate_claim_trust(claim)
 
     claim.confidence_explanation = generate_confidence_explanation(claim)
@@ -195,7 +205,7 @@ def _finalize_claim_processing(claim, question):
     claim.risk_level = compute_risk_level(claim.verifiability_score)
     return claim
 
-def _core_verify(question: str, answer: str) -> AnalysisResponse:
+def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
     with ThreadPoolExecutor(max_workers=4) as executor:
@@ -204,11 +214,24 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
 
+    claims_to_process_fully = []
+    processed_claims_early = []
+
+    for claim in refined_claims:
+        is_low_risk_fact = claim.claim_type == ClaimType.HARD_FACT and (claim.verifiability_score or 1.0) <= 0.3
+        if mode == "fast" and is_low_risk_fact:
+            claim.confidence_explanation = ["Low-risk factual claim. Deep verification skipped in fast mode."]
+            claim.support_strength = 1.0 
+            claim.contradiction_strength = 0.0
+            processed_claims_early.append(claim)
+        else:
+            claims_to_process_fully.append(claim)
+
     relevance_score = compute_qa_relevance(question, answer)
 
     claims_by_text = defaultdict(list)
     unique_claim_texts = set()
-    for claim in refined_claims:
+    for claim in claims_to_process_fully:
         if claim.claim_type != ClaimType.OPINION:
             claims_by_text[claim.text].append(claim)
             unique_claim_texts.add(claim.text)
@@ -222,7 +245,8 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
         evidence_map = dict(zip(all_unique_queries, evidence_results))
 
     for text, claims_group in claims_by_text.items():
-        evidence = evidence_map.get(text, [])[:2]
+        evidence_limit = 1 if mode == "fast" else 2
+        evidence = evidence_map.get(text, [])[:evidence_limit]
         for claim in claims_group:
             claim.evidence = evidence
 
@@ -230,14 +254,15 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
     nli_batch_pairs = []
     nli_batch_targets = []
 
-    for claim in refined_claims:
+    for claim in claims_to_process_fully:
         if claim.claim_type == ClaimType.OPINION:
             continue
 
         evidence_to_process = claim.evidence[:1]
 
         for ev in evidence_to_process:
-            if (ev.similarity or 0) > 0.7 and (ev.source_trust or 0) >= 0.9:
+            skip_threshold = 0.65 if mode == "fast" else 0.7
+            if (ev.similarity or 0) > skip_threshold and (ev.source_trust or 0) >= 0.9:
                 ev.support_label = "supports"
                 ev.support_score = 0.95
                 continue
@@ -260,17 +285,18 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
             nli_cache[cache_key] = (label, score)
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        processed_claims = list(
-            executor.map(lambda c: _finalize_claim_processing(c, question), refined_claims)
+        fully_processed_claims = list(
+            executor.map(lambda c: _finalize_claim_processing(c, question), claims_to_process_fully)
         )
-    refined_claims = processed_claims
+    
+    final_claims = processed_claims_early + fully_processed_claims
 
-    epistemic_trust = compute_overall_trust_score(refined_claims)
+    epistemic_trust = compute_overall_trust_score(final_claims)
 
-    if refined_claims and all(c.claim_type == ClaimType.OPINION for c in refined_claims):
+    if final_claims and all(c.claim_type == ClaimType.OPINION for c in final_claims):
         epistemic_trust *= 0.3
 
-    contradictions = detect_internal_contradictions(refined_claims)
+    contradictions = detect_internal_contradictions(final_claims)
 
     if contradictions:
         epistemic_trust *= 0.5
@@ -287,7 +313,7 @@ def _core_verify(question: str, answer: str) -> AnalysisResponse:
 
     return AnalysisResponse(
         original_text=answer,
-        claims=refined_claims,
+        claims=final_claims,
         contradictions=contradictions,
         overall_trust_score=final_trust_score,
         signals=signals,
@@ -300,9 +326,10 @@ def verify_llm_response(
     payload: LLMVerificationRequest,
     request: Request
 ):
+    mode = payload.mode
     client_ip = request.client.host if request.client else "unknown"
-    logger.info(f"Verify LLM response request from IP: {client_ip}")
-    return _core_verify(payload.question, payload.answer)
+    logger.info(f"Verify LLM response request from IP: {client_ip} in '{mode}' mode.")
+    return _core_verify(payload.question, payload.answer, mode=mode)
 
 async def stream_verification(question: str, answer: str):
     """
