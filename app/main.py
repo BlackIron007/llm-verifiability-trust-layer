@@ -258,10 +258,14 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         evidence_map = dict(zip(all_unique_queries, evidence_results))
 
     for text, claims_group in claims_by_text.items():
+        all_evidence = evidence_map.get(text, [])
+        
+        pruned_evidence = [ev for ev in all_evidence if (ev.similarity or 0) > 0.6]
+        
         evidence_limit = 1 if mode == "fast" else 2
-        evidence = evidence_map.get(text, [])[:evidence_limit]
+        final_evidence = pruned_evidence[:evidence_limit]
         for claim in claims_group:
-            claim.evidence = evidence
+            claim.evidence = final_evidence
 
     nli_cache = {} 
     nli_batch_pairs = []
@@ -274,8 +278,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         evidence_to_process = claim.evidence[:1]
 
         for ev in evidence_to_process:
-            skip_threshold = 0.65 if mode == "fast" else 0.7
-            if (ev.similarity or 0) > skip_threshold and (ev.source_trust or 0) >= 0.9:
+            if (ev.similarity or 0) > 0.7 and (ev.source_trust or 0) >= 0.9:
                 ev.support_label = "supports"
                 ev.support_score = 0.95
                 continue
@@ -354,17 +357,17 @@ async def stream_verification(question: str, answer: str):
     """
     Splits an answer into sentences, verifies each sentence, and streams the results.
     """
+    loop = asyncio.get_running_loop()
     sentences = sent_tokenize(answer)
 
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-
-        result = _core_verify(question, sentence)
-
-        yield f"data: {json.dumps(result.dict())}\n\n"
-        await asyncio.sleep(0.1)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tasks = [
+            loop.run_in_executor(executor, _core_verify, question, s.strip())
+            for s in sentences if s.strip()
+        ]
+        for future in asyncio.as_completed(tasks):
+            result = await future
+            yield f"data: {json.dumps(result.dict())}\n\n"
 
 @router.post("/verify_stream", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
@@ -386,18 +389,21 @@ async def verify_stream(
 
 @router.post("/verify_batch", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
-def verify_batch(
+async def verify_batch(
     payload: BatchVerificationRequest,
     request: Request
 ):
     client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Verify batch request from IP: {client_ip} with {len(payload.items)} items")
 
-    results = []
+    loop = asyncio.get_running_loop()
 
-    for item in payload.items:
-        result = _core_verify(item.question, item.answer)
-        results.append(result)
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        tasks = [
+            loop.run_in_executor(executor, _core_verify, item.question, item.answer, item.mode)
+            for item in payload.items
+        ]
+        results = await asyncio.gather(*tasks)
 
     return {"results": results}
 

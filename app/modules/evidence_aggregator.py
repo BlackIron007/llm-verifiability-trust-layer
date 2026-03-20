@@ -1,3 +1,7 @@
+def is_high_confidence_evidence(ev):
+    """Checks if evidence is a high-confidence hit based on similarity and source trust."""
+    return (ev.similarity or 0) > 0.7 and (ev.source_trust or 0) >= 0.9
+
 def aggregate_evidence(evidence_list):
     """
     Combine multiple evidence items into a single support signal.
@@ -6,6 +10,12 @@ def aggregate_evidence(evidence_list):
     if not evidence_list:
         return {
             "support_strength": 0.0,
+            "contradiction_strength": 0.0
+        }
+
+    if any(is_high_confidence_evidence(ev) for ev in evidence_list):
+        return {
+            "support_strength": 1.0,
             "contradiction_strength": 0.0
         }
 
