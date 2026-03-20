@@ -70,7 +70,17 @@ async def lifespan(app: FastAPI):
     check_local_nltk_data()
     logger.info("Application startup: Warming up models...")
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, lambda: _fetch_evidence("United States"))
+
+    def run_warmup():
+        warmup_queries = [
+            "Key events of World War 2",
+            "Scientific evidence for climate change",
+            "History of the internet"
+        ]
+        with ThreadPoolExecutor(max_workers=len(warmup_queries)) as executor:
+            list(executor.map(_fetch_evidence, warmup_queries))
+
+    await loop.run_in_executor(None, run_warmup)
     logger.info("Application startup: Models are warm and ready.")
     yield
     
@@ -190,9 +200,11 @@ def _finalize_claim_processing(claim, question):
     claim.qa_consistent = is_consistent
     claim.qa_similarity = round(sim, 3)
 
-    if claim.support_strength > 0.9:
+    if claim.support_strength > 0.7:
         claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.15)
-    elif claim.support_strength > 0.6:
+    elif claim.support_strength > 0.5:
+        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.10)
+    elif claim.support_strength > 0.3:
         claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.05)
 
     claim = calibrate_claim_trust(claim)
@@ -202,6 +214,7 @@ def _finalize_claim_processing(claim, question):
     if not is_consistent:
         claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + 0.6)
     
+    claim.verifiability_score = round(claim.verifiability_score or 0, 3)
     claim.risk_level = compute_risk_level(claim.verifiability_score)
     return claim
 
@@ -283,6 +296,12 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             ev.support_score = score
             cache_key = (nli_batch_pairs[i][0], nli_batch_pairs[i][1])
             nli_cache[cache_key] = (label, score)
+
+    for claim in claims_to_process_fully:
+        for ev in claim.evidence:
+            if ev.support_label is None:
+                ev.support_label = "neutral"
+                ev.support_score = 0.5
 
     with ThreadPoolExecutor(max_workers=8) as executor:
         fully_processed_claims = list(
