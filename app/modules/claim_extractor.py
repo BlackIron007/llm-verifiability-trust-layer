@@ -17,6 +17,11 @@ META_PHRASES = (
     "The statement is a complete factual unit",
 )
 
+HEDGING_PHRASES = (
+    "maybe", "perhaps", "possibly", "probably", "might be", "could be", "seems to",
+    "in my opinion", "i think", "i believe"
+)
+
 
 def repair_split_claims(claims: List[Claim]) -> List[Claim]:
     """
@@ -56,6 +61,11 @@ def _is_meta_statement(s: str) -> bool:
     return False
 
 
+def _is_hedged(s: str) -> bool:
+    lower = s.lower()
+    return any(phrase in lower for phrase in HEDGING_PHRASES)
+
+
 def filter_claims(claims: List[Claim]) -> List[Claim]:
     """Sanitize and remove fragments/meta/instructional statements."""
     filtered: List[Claim] = []
@@ -63,11 +73,13 @@ def filter_claims(claims: List[Claim]) -> List[Claim]:
         text = _strip_outer_quotes((c.text or "").strip())
         if not text:
             continue
-        if len(text.split()) < 2:
+        if len(text.split()) < 3:
             continue
         if text.lower().startswith(("in ", "on ", "at ", "during ", "after ", "before ")):
             continue
         if _is_meta_statement(text):
+            continue
+        if _is_hedged(text):
             continue
         c.text = text
         filtered.append(c)

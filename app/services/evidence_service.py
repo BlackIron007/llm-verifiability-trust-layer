@@ -30,24 +30,27 @@ def best_sentence_match(claim_text: str, paragraph: str):
 
 from ddgs import DDGS
 from app.services.source_trust_service import compute_source_trust
-from app.modules.retrieval_controller import evidence_is_weak, refine_query
+from concurrent.futures import ThreadPoolExecutor
 
 
 def retrieve_evidence(claim_text: str, top_k: int = 3):
-    evidence_list = retrieve_wikipedia_evidence(claim_text, top_k)
-
-    if evidence_is_weak(evidence_list):
-        print("Iterative retrieval triggered")
-        refined_query = refine_query(claim_text)
-        ddgs_evidence = retrieve_ddgs_evidence(refined_query, top_k)
-        evidence_list.extend(ddgs_evidence)
-
-    evidence_list.sort(
+    """
+    Retrieves evidence from multiple sources in parallel to minimize network latency.
+    """
+    all_evidence = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        wiki_future = executor.submit(retrieve_wikipedia_evidence, claim_text, top_k)
+        ddgs_future = executor.submit(retrieve_ddgs_evidence, claim_text, top_k)
+        
+        all_evidence.extend(wiki_future.result())
+        all_evidence.extend(ddgs_future.result())
+    
+    all_evidence.sort(
         key=lambda x: (x.similarity or 0) * 0.7 + (x.source_trust or 0) * 0.3,
         reverse=True
     )
-
-    return evidence_list
+    
+    return all_evidence
 
 
 def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):

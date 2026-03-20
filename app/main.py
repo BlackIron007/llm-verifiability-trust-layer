@@ -221,8 +221,11 @@ def _finalize_claim_processing(claim, question):
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        classified_claims = list(executor.map(classify_claim, claims))
+    
+    classified_claims = []
+    if claims:
+        with ThreadPoolExecutor(max_workers=min(4, len(claims))) as executor:
+            classified_claims = list(executor.map(classify_claim, claims))
         
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
@@ -231,16 +234,25 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     processed_claims_early = []
 
     for claim in refined_claims:
-        is_low_risk_fact = claim.claim_type == ClaimType.HARD_FACT and (claim.verifiability_score or 1.0) <= 0.3
-        if mode == "fast" and is_low_risk_fact:
+        is_low_risk_hard_fact = claim.claim_type == ClaimType.HARD_FACT and (claim.verifiability_score or 1.0) <= 0.3
+        is_very_simple_fact = len(claim.text.split()) < 8
+
+        if is_low_risk_hard_fact and is_very_simple_fact:
+            claim.confidence_explanation = ["Simple, low-risk factual claim. Deep verification bypassed."]
+            claim.support_strength = 1.0
+            claim.contradiction_strength = 0.0
+            processed_claims_early.append(claim)
+            continue
+
+        if mode == "fast" and is_low_risk_hard_fact:
             claim.confidence_explanation = ["Low-risk factual claim. Deep verification skipped in fast mode."]
-            claim.support_strength = 1.0 
+            claim.support_strength = 1.0
             claim.contradiction_strength = 0.0
             processed_claims_early.append(claim)
         else:
             claims_to_process_fully.append(claim)
 
-    relevance_score = compute_qa_relevance(question, answer)
+    relevance_score = 0.9 if len(answer.split()) < 40 else compute_qa_relevance(question, answer)
 
     claims_by_text = defaultdict(list)
     unique_claim_texts = set()
@@ -253,7 +265,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
 
     evidence_map = {}
     if all_unique_queries:
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=min(8, len(all_unique_queries))) as executor:
             evidence_results = list(executor.map(_fetch_evidence, all_unique_queries))
         evidence_map = dict(zip(all_unique_queries, evidence_results))
 
@@ -306,12 +318,18 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
                 ev.support_label = "neutral"
                 ev.support_score = 0.5
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        fully_processed_claims = list(
-            executor.map(lambda c: _finalize_claim_processing(c, question), claims_to_process_fully)
-        )
+    fully_processed_claims = []
+    if claims_to_process_fully:
+        with ThreadPoolExecutor(max_workers=min(8, len(claims_to_process_fully))) as executor:
+            fully_processed_claims = list(executor.map(lambda c: _finalize_claim_processing(c, question), claims_to_process_fully))
     
     final_claims = processed_claims_early + fully_processed_claims
+
+    for claim in final_claims:
+        if claim.qa_consistent is None:
+            is_consistent, sim = check_question_claim_consistency(question, claim.text)
+            claim.qa_consistent = is_consistent
+            claim.qa_similarity = round(sim, 3)
 
     epistemic_trust = compute_overall_trust_score(final_claims)
 
@@ -360,14 +378,15 @@ async def stream_verification(question: str, answer: str):
     loop = asyncio.get_running_loop()
     sentences = sent_tokenize(answer)
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        tasks = [
-            loop.run_in_executor(executor, _core_verify, question, s.strip())
-            for s in sentences if s.strip()
-        ]
-        for future in asyncio.as_completed(tasks):
-            result = await future
-            yield f"data: {json.dumps(result.dict())}\n\n"
+    if sentences:
+        with ThreadPoolExecutor(max_workers=min(4, len(sentences))) as executor:
+            tasks = [
+                loop.run_in_executor(executor, _core_verify, question, s.strip())
+                for s in sentences if s.strip()
+            ]
+            for future in asyncio.as_completed(tasks):
+                result = await future
+                yield f"data: {json.dumps(result.dict())}\n\n"
 
 @router.post("/verify_stream", dependencies=[Depends(verify_api_key)])
 @limiter.limit("5/minute")
@@ -398,12 +417,14 @@ async def verify_batch(
 
     loop = asyncio.get_running_loop()
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
-        tasks = [
-            loop.run_in_executor(executor, _core_verify, item.question, item.answer, item.mode)
-            for item in payload.items
-        ]
-        results = await asyncio.gather(*tasks)
+    results = []
+    if payload.items:
+        with ThreadPoolExecutor(max_workers=min(4, len(payload.items))) as executor:
+            tasks = [
+                loop.run_in_executor(executor, _core_verify, item.question, item.answer, item.mode)
+                for item in payload.items
+            ]
+            results = await asyncio.gather(*tasks)
 
     return {"results": results}
 
