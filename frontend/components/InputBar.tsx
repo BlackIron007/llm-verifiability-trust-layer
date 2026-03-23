@@ -6,19 +6,20 @@ export default function InputBar({ onSubmit }) {
   const [text, setText] = useState("");
 
   return (
-    <div className="border border-[#e8e2d8] rounded-xl p-4 bg-[#faf8f3]">
+    <div className="border border-border rounded-lg p-6 bg-surface shadow-sm transition-shadow hover:shadow-md">
       <textarea
-        className="w-full bg-transparent outline-none text-sm placeholder-[#6b5d4f]"
+        className="w-full bg-transparent outline-none text-base placeholder-textSecondary text-text leading-relaxed resize-none"
         placeholder="Enter text to verify..."
         value={text}
         onChange={(e) => setText(e.target.value)}
+        rows={4}
       />
 
-      <div className="flex justify-between items-center mt-3">
-        <span className="text-xs text-[#6b5d4f]">Fast Mode</span>
+      <div className="flex justify-between items-center mt-4">
+        <span className="text-sm text-textSecondary font-light">Fast Mode</span>
         <button
           onClick={() => onSubmit(text)}
-          className="text-sm border border-[#e8e2d8] px-4 py-1 rounded-lg hover:bg-[#faf8f3]"
+          className="text-sm border border-border px-6 py-2 rounded text-text hover:bg-border transition-colors duration-200"
         >
           Analyze
         </button>
