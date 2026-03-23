@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Dict, Optional, Any
 from enum import Enum
 from typing import List
 from app.schemas.evidence import Evidence
@@ -31,3 +31,4 @@ class Claim(BaseModel):
     support_strength: float | None = None
     contradiction_strength: float | None = None
     confidence_explanation: list[str] | None = None
+    score_breakdown: Optional[Dict[str, Any]] = None

@@ -48,6 +48,8 @@ import json
 import asyncio
 from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
 from collections import defaultdict
+from pydantic import BaseModel
+import re
 
 class LimitUploadSize(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -216,6 +218,19 @@ def _finalize_claim_processing(claim, question):
     
     claim.verifiability_score = round(claim.verifiability_score or 0, 3)
     claim.risk_level = compute_risk_level(claim.verifiability_score)
+
+    claim.score_breakdown = {
+        "support": claim.support_strength,
+        "contradictions": claim.contradiction_strength,
+        "qa_alignment": claim.qa_similarity
+    }
+
+    if hasattr(claim, "evidence") and claim.evidence:
+        claim.evidence.sort(
+            key=lambda x: ((x.support_score or 0) * (x.source_trust or 0.5)),
+            reverse=True
+        )
+
     return claim
 
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
@@ -333,7 +348,9 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
 
     epistemic_trust = compute_overall_trust_score(final_claims)
 
-    if final_claims and all(c.claim_type == ClaimType.OPINION for c in final_claims):
+    opinion_pattern = r'\b(think|thoughts|opinion|perspective|stance|favorite|best|feel|recommend|should|suggest)\b'
+    is_opinion_soliciting = bool(re.search(opinion_pattern, question, re.IGNORECASE))
+    if final_claims and all(c.claim_type == ClaimType.OPINION for c in final_claims) and not is_opinion_soliciting:
         epistemic_trust *= 0.3
 
     contradictions = detect_internal_contradictions(final_claims)
@@ -427,5 +444,27 @@ async def verify_batch(
             results = await asyncio.gather(*tasks)
 
     return {"results": results}
+
+class ExplainRequest(BaseModel):
+    claim_text: str
+
+@router.post("/explain", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+def explain_claim_on_demand(
+    payload: ExplainRequest,
+    request: Request
+):
+    """
+    On-Demand Explanation Layer.
+    Generates an explanation for a claim's trust score asynchronously to save latency on the main verification path.
+    """
+    client_ip = request.client.host if request.client else "unknown"
+    logger.info(f"Explain claim request from IP: {client_ip}")
+    
+    from app.services.model_client import ModelClient
+    prompt = f"Explain the verifiability and factual reasoning for the following claim. Keep it concise, objective, and highlight if it's a hard fact or subjective.\n\nClaim: '{payload.claim_text}'"
+    explanation = ModelClient.generate(prompt).strip()
+    
+    return {"explanation": explanation}
 
 app.include_router(router)
