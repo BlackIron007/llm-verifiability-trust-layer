@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-export default function InputBar({ onSubmit }) {
+export default function InputBar({ onSubmit, isLoading }) {
   const [text, setText] = useState("");
 
   return (
@@ -19,9 +19,10 @@ export default function InputBar({ onSubmit }) {
         <span className="text-sm text-textSecondary font-light">Fast Mode</span>
         <button
           onClick={() => onSubmit(text)}
-          className="text-sm border border-border px-6 py-2 rounded text-text hover:bg-border transition-colors duration-200"
+          disabled={isLoading || !text.trim()}
+          className={`text-sm border border-border px-6 py-2 rounded transition-colors duration-200 ${isLoading || !text.trim() ? 'opacity-50 cursor-not-allowed text-textSecondary' : 'text-text hover:bg-border'}`}
         >
-          Analyze
+          {isLoading ? "Analyzing..." : "Analyze"}
         </button>
       </div>
     </div>
