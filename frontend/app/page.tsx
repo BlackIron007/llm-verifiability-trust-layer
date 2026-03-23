@@ -10,12 +10,14 @@ export default function Page() {
   const [data, setData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [hoveredClaimIndex, setHoveredClaimIndex] = useState<number | null>(null);
+  const [showUnsafeOverride, setShowUnsafeOverride] = useState(false);
 
-  const handleSubmit = async (text) => {
+  const handleSubmit = async (text, mode) => {
     setIsLoading(true);
     setData(null);
+    setShowUnsafeOverride(false);
     try {
-      const res = await verify(text);
+      const res = await verify(text, mode);
       setData(res);
     } finally {
       setIsLoading(false);
@@ -61,27 +63,44 @@ export default function Page() {
         )}
 
         {data && (
-          <>
-            <TrustSummary data={data} />
-
-            <div className="border border-border rounded-lg p-8 bg-surface shadow-sm transition-all duration-300">
-              <h2 className="text-xl font-light text-text mb-4">📄 Verified Answer</h2>
-              <p className="text-base text-text leading-relaxed font-light whitespace-pre-wrap">
-                {renderOriginalText()}
-              </p>
+          !data.is_safe && !showUnsafeOverride ? (
+            <div className="border border-red-200 bg-red-50 rounded-lg p-10 text-center space-y-5 shadow-sm animate-fadeIn">
+              <div className="text-4xl">⚠️</div>
+              <div>
+                <h2 className="text-xl text-red-800 font-medium mb-1">This response may be unreliable</h2>
+                <p className="text-sm text-red-600/80 font-light">High epistemic risk or internal contradictions detected.</p>
+              </div>
+              <button 
+                onClick={() => setShowUnsafeOverride(true)} 
+                className="mt-4 text-sm border border-red-200 bg-white text-red-700 px-6 py-2 rounded hover:bg-red-50 transition-colors duration-200 shadow-sm"
+              >
+                View anyway
+              </button>
             </div>
-
-            <div className="space-y-6">
-              {data.claims.map((c, i) => (
-                <ClaimCard 
-                  key={i} 
-                  claim={c} 
-                  onMouseEnter={() => setHoveredClaimIndex(i)}
-                  onMouseLeave={() => setHoveredClaimIndex(null)}
-                />
-              ))}
+          ) : (
+            <div className="space-y-12 animate-fadeIn">
+              <TrustSummary data={data} />
+  
+              <div className="border border-border rounded-lg p-8 bg-surface shadow-sm transition-all duration-300">
+                <h2 className="text-xl font-light text-text mb-4">📄 Verified Answer</h2>
+                <p className="text-base text-text leading-relaxed font-light whitespace-pre-wrap">
+                  {renderOriginalText()}
+                </p>
+              </div>
+  
+              <div className="space-y-6">
+                {data.claims.map((c, i) => (
+                  <div key={i} className="opacity-0 animate-fadeIn" style={{ animationDelay: `${i * 100}ms` }}>
+                    <ClaimCard 
+                      claim={c} 
+                      onMouseEnter={() => setHoveredClaimIndex(i)}
+                      onMouseLeave={() => setHoveredClaimIndex(null)}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
-          </>
+          )
         )}
       </div>
     </div>

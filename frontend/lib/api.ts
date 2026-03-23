@@ -1,4 +1,4 @@
-export async function verify(text) {
+export async function verify(text, mode = "fast") {
   const res = await fetch("http://localhost:8000/api/v1/verify_llm_response", {
     method: "POST",
     headers: {
@@ -7,6 +7,7 @@ export async function verify(text) {
     body: JSON.stringify({
       question: text,
       answer: text,
+      mode: mode,
     }),
   });
 
