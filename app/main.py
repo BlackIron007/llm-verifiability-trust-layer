@@ -237,6 +237,39 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
     
+    try:
+        sentences = sent_tokenize(answer)
+        sentence_offsets = []
+        curr_pos = 0
+        for s in sentences:
+            start = answer.find(s, curr_pos)
+            if start != -1:
+                sentence_offsets.append((s, start, start + len(s)))
+                curr_pos = start + len(s)
+        
+        for claim in claims:
+            exact_idx = answer.lower().find(claim.text.lower())
+            if exact_idx != -1:
+                claim.start_char = exact_idx
+                claim.end_char = exact_idx + len(claim.text)
+                continue
+            
+            claim_tokens = set(re.findall(r'\w+', claim.text.lower()))
+            best_match, best_overlap = None, 0.0
+            for s_text, start, end in sentence_offsets:
+                s_tokens = set(re.findall(r'\w+', s_text.lower()))
+                if not s_tokens or not claim_tokens: continue
+                overlap = len(claim_tokens.intersection(s_tokens)) / len(claim_tokens.union(s_tokens))
+                if overlap > best_overlap:
+                    best_overlap = overlap
+                    best_match = (start, end)
+            
+            if best_overlap > 0.3 and best_match:
+                claim.start_char = best_match[0]
+                claim.end_char = best_match[1]
+    except Exception as e:
+        logger.warning(f"Failed to compute citation offsets: {e}")
+
     classified_claims = []
     if claims:
         with ThreadPoolExecutor(max_workers=min(4, len(claims))) as executor:
@@ -462,9 +495,28 @@ def explain_claim_on_demand(
     logger.info(f"Explain claim request from IP: {client_ip}")
     
     from app.services.model_client import ModelClient
-    prompt = f"Explain the verifiability and factual reasoning for the following claim. Keep it concise, objective, and highlight if it's a hard fact or subjective.\n\nClaim: '{payload.claim_text}'"
-    explanation = ModelClient.generate(prompt).strip()
+    prompt = f"""Analyze the factual verifiability of the following claim.
+    Keep the explanation concise and objective.
+    If the claim is likely false, unverified, or hallucinated, classify the error into a specific category (e.g., Entity Mismatch, Number Exaggeration, Anachronism, Unsupported, Logical Fallacy). If the claim is well-supported and true, set the category to null.
+
+    Respond STRICTLY in the following JSON format without any markdown or extra text:
+    {{
+        "explanation": "Your concise explanation here.",
+        "error_category": "Category name or null"
+    }}
+
+    Claim: '{payload.claim_text}'"""
     
-    return {"explanation": explanation}
+    raw_response = ModelClient.generate(prompt).strip()
+    
+    try:
+        json_str = re.sub(r'^```json\s*', '', raw_response)
+        json_str = re.sub(r'^```\s*', '', json_str)
+        json_str = re.sub(r'\s*```$', '', json_str)
+        data = json.loads(json_str)
+        return data
+    except Exception as e:
+        logger.error(f"Failed to parse explanation JSON: {e}. Raw: {raw_response}")
+        return {"explanation": raw_response, "error_category": None}
 
 app.include_router(router)

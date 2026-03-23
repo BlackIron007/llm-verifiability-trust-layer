@@ -6,26 +6,34 @@ from nltk.tokenize import sent_tokenize
 
 def best_sentence_match(claim_text: str, paragraph: str):
     """
-    Find the sentence in a paragraph that best matches the claim.
+    Find the sentence in a paragraph that best matches the claim,
+    and return a 3-sentence context window (prev, best, next) to aid NLI comprehension.
     """
     try:
         sentences = sent_tokenize(paragraph) if paragraph else []
     except Exception:
         sentences = [paragraph] if paragraph else []
 
-    best_sentence = ""
     best_score = 0.0
+    best_idx = -1
 
-    for sentence in sentences:
+    for i, sentence in enumerate(sentences):
         try:
             score = compute_similarity(claim_text, sentence)
         except Exception:
             score = 0.0
         if score > best_score:
             best_score = score
-            best_sentence = sentence
+            best_idx = i
 
-    return best_sentence, best_score
+    if best_idx == -1:
+        return "", 0.0
+
+    start_idx = max(0, best_idx - 1)
+    end_idx = min(len(sentences), best_idx + 2)
+    best_sentence_window = " ".join(sentences[start_idx:end_idx])
+
+    return best_sentence_window, best_score
 
 
 from ddgs import DDGS

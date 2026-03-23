@@ -21,6 +21,8 @@ class Claim(BaseModel):
     text: str
     claim_type: Optional[ClaimType] = None
     verifiability_score: Optional[float] = None
+    start_char: Optional[int] = None
+    end_char: Optional[int] = None
     risk_level: Optional[RiskLevel] = None
     explanation: Optional[str] = None
     secondary_explanation: Optional[str] = None
