@@ -38,6 +38,13 @@ def extract_domain(url: str):
     except Exception:
         return ""
 
+def get_trust_level_label(score: float) -> str:
+    if score >= HIGH_TRUST_WEIGHT:
+        return "High Trust"
+    if score >= MEDIUM_TRUST_WEIGHT:
+        return "Medium Trust"
+    return "Low Trust"
+
 
 def compute_source_trust(url: str):
 

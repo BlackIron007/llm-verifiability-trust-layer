@@ -394,6 +394,29 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     epistemic_risk = 1 - epistemic_trust
 
     final_trust_score = round(relevance_score * epistemic_trust, 3)
+
+    summary_bullets = []
+    if epistemic_trust >= 0.8:
+        summary_bullets.append("✔ Mostly correct and highly verified")
+    elif epistemic_trust >= 0.5:
+        summary_bullets.append("⚠ Mixed factual accuracy")
+    else:
+        summary_bullets.append("❌ Low verifiability / Highly hallucinated")
+
+    if contradictions:
+        summary_bullets.append("❌ Internal contradictions detected")
+    else:
+        summary_bullets.append("✔ No internal contradictions")
+
+    avg_support = sum(c.support_strength or 0 for c in final_claims) / len(final_claims) if final_claims else 0
+    if avg_support >= 0.7:
+        summary_bullets.append("✔ Strong overall evidence support")
+    elif avg_support >= 0.4:
+        summary_bullets.append("⚠ Moderate evidence support")
+    else:
+        summary_bullets.append("❌ Weak or missing evidence")
+
+    is_safe = epistemic_trust >= 0.6 and not contradictions
     
     signals = {
         "qa_relevance": relevance_score,
@@ -407,6 +430,8 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         contradictions=contradictions,
         overall_trust_score=final_trust_score,
         signals=signals,
+        summary_bullets=summary_bullets,
+        is_safe=is_safe,
         message="LLM response verification completed."
     )
 

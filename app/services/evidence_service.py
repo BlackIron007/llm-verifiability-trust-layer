@@ -37,9 +37,8 @@ def best_sentence_match(claim_text: str, paragraph: str):
 
 
 from ddgs import DDGS
-from app.services.source_trust_service import compute_source_trust
+from app.services.source_trust_service import compute_source_trust, get_trust_level_label, extract_domain
 from concurrent.futures import ThreadPoolExecutor
-
 
 def retrieve_evidence(claim_text: str, top_k: int = 3):
     """
@@ -104,6 +103,7 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                 best_sentence, similarity = best_sentence_match(claim_text, summary)
 
                 if similarity >= 0.6:
+                    trust_score = compute_source_trust(page.url)
                     evidence_list.append(
                         Evidence(
                             source="Wikipedia",
@@ -111,7 +111,9 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                             url=page.url,
                             evidence=best_sentence,
                             similarity=round(similarity, 3),
-                            source_trust=compute_source_trust(page.url)
+                            source_trust=trust_score,
+                            source_trust_level=get_trust_level_label(trust_score),
+                            domain="wikipedia.org"
                         )
                     )
 
@@ -154,6 +156,7 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
                 best_sentence, similarity = best_sentence_match(claim_text, snippet)
 
                 if similarity >= 0.5:
+                    trust_score = compute_source_trust(url)
                     evidence_list.append(
                         Evidence(
                             source="DDGS",
@@ -161,7 +164,9 @@ def retrieve_ddgs_evidence(claim_text: str, top_k: int = 3):
                             url=url,
                             evidence=best_sentence,
                             similarity=round(similarity, 3),
-                            source_trust=compute_source_trust(url)
+                            source_trust=trust_score,
+                            source_trust_level=get_trust_level_label(trust_score),
+                            domain=extract_domain(url)
                         )
                     )
 

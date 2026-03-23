@@ -9,4 +9,6 @@ class AnalysisResponse(BaseModel):
     overall_trust_score: float
     message: str
     signals: dict
+    summary_bullets: list[str] = []
+    is_safe: bool = True
     contradictions: list | None = None
