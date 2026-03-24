@@ -17,3 +17,10 @@ __pycache__/
 *.db
 
 nltk_data/
+
+# Frontend (Next.js & Node)
+node_modules/
+.next/
+out/
+build/
+.env*.local

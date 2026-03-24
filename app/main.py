@@ -378,6 +378,13 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             is_consistent, sim = check_question_claim_consistency(question, claim.text)
             claim.qa_consistent = is_consistent
             claim.qa_similarity = round(sim, 3)
+            
+            if claim.score_breakdown is None:
+                claim.score_breakdown = {
+                    "support": claim.support_strength or 0.0,
+                    "contradictions": claim.contradiction_strength or 0.0,
+                    "qa_alignment": claim.qa_similarity or 0.0
+                }
 
     epistemic_trust = compute_overall_trust_score(final_claims)
 
