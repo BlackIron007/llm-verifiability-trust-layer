@@ -9,7 +9,7 @@ const faqs = [
   },
   {
     q: "How is evidence collected?",
-    a: "TrustLayer searches across multiple knowledge sources in real time, retrieves relevant passages, and uses natural language inference to determine whether each source supports or contradicts the AI's claims.",
+    a: "Veritas AI searches across multiple knowledge sources in real time, retrieves relevant passages, and uses natural language inference to determine whether each source supports or contradicts the AI's claims.",
   },
   {
     q: "What is the difference between Quick Scan and Deep Analysis?",
@@ -17,7 +17,7 @@ const faqs = [
   },
   {
     q: "Can I use this for any AI model?",
-    a: "Yes. TrustLayer is model-agnostic. Paste the AI's response regardless of which model generated it — GPT, Claude, Gemini, Llama, or any other. The verification pipeline works on the content itself.",
+    a: "Yes. Veritas AI is model-agnostic. Paste the AI's response regardless of which model generated it — GPT, Claude, Gemini, Llama, or any other. The verification pipeline works on the content itself.",
   },
   {
     q: "What claim types are detected?",

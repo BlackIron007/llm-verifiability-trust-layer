@@ -38,15 +38,53 @@ def compute_risk_level(score: float) -> RiskLevel:
 
 def compute_overall_trust_score(claims: List[Claim]) -> float:
     """
-    Compute overall trust score as inverse average risk.
-    Higher trust score = lower average risk.
+    Evidence-based trust scoring with exponential penalty for multiple bad claims.
+
+    For each claim:
+      - trust = support_strength - contradiction_strength, clamped to [0.05, 1.0]
+      - If no strong support (support_strength < 0.3), cap trust at 0.15
+      - If contradiction detected (contradiction_strength > 0.3), cap trust at 0.1
+
+    Overall trust = product of all per-claim trusts (exponential penalty).
+    This ensures multiple incorrect claims compound to very low scores.
     """
 
     if not claims:
         return 1.0
 
-    avg_risk = sum(c.verifiability_score or 0 for c in claims) / len(claims)
+    per_claim_trusts = []
 
-    trust_score = 1 - avg_risk
+    for c in claims:
+        support = c.support_strength or 0.0
+        contradiction = c.contradiction_strength or 0.0
 
-    return round(trust_score, 3)
+        if c.claim_type == ClaimType.OPINION:
+            per_claim_trusts.append(0.8)
+            continue
+
+        claim_trust = support - contradiction
+        claim_trust = max(0.05, min(1.0, claim_trust))
+
+        # Contradiction detected → hard cap
+        if contradiction > 0.3:
+            claim_trust = min(claim_trust, 0.1)
+
+        # No credible supporting evidence → cap low
+        if support < 0.3:
+            claim_trust = min(claim_trust, 0.15)
+
+        per_claim_trusts.append(claim_trust)
+
+    if not per_claim_trusts:
+        return 1.0
+
+    # Product scoring: multiple bad claims compound exponentially
+    overall = 1.0
+    for t in per_claim_trusts:
+        overall *= t
+
+    # Normalize: take the geometric mean so single-claim inputs aren't unfairly low
+    n = len(per_claim_trusts)
+    overall = overall ** (1.0 / n) if n > 1 else overall
+
+    return round(max(0.0, min(1.0, overall)), 3)

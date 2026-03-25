@@ -1,5 +1,7 @@
 "use client";
 
+import { Check, AlertCircle, Minus } from "lucide-react";
+
 interface TrustSummaryProps {
   data: {
     overall_trust_score: number;
@@ -11,114 +13,49 @@ interface TrustSummaryProps {
     summary_bullets?: string[];
     is_safe?: boolean;
   };
-  mode?: string;
 }
 
-export default function TrustSummary({ data, mode }: TrustSummaryProps) {
+export default function TrustSummary({ data }: TrustSummaryProps) {
   const score = data.overall_trust_score;
   const pct = Math.round(score * 100);
 
-  const circumference = 283;
-  const offset = circumference - (circumference * score);
-
-  let verdict = "Likely Unreliable";
-  let ringColor = "#8b4f4f";
-  let verdictColor = "text-trust-low";
-
-  if (score >= 0.7) {
-    verdict = "Mostly Reliable";
-    ringColor = "#3d6b4f";
-    verdictColor = "text-trust-high";
-  } else if (score >= 0.4) {
-    verdict = "Proceed with Caution";
-    ringColor = "#8b7355";
-    verdictColor = "text-trust-medium";
-  }
+  const ringStyle = {
+    background: `conic-gradient(#715b3e 0% ${pct}%, #ebe2cb ${pct}% 100%)`,
+  };
 
   const formatBullet = (b: string) => {
-    if (b.startsWith("✔")) return { symbol: "→", text: b.slice(2), color: "text-trust-high" };
-    if (b.startsWith("❌")) return { symbol: "×", text: b.slice(2), color: "text-trust-low" };
-    if (b.startsWith("⚠")) return { symbol: "—", text: b.slice(2), color: "text-trust-medium" };
-    return { symbol: "·", text: b, color: "text-textSecondary" };
+    if (b.startsWith("✔")) return { symbol: <Check strokeWidth={1.5} className="w-4 h-4 text-emerald-600" />, text: b.slice(2), bg: "" };
+    if (b.startsWith("❌")) return { symbol: <AlertCircle strokeWidth={1.5} className="w-4 h-4 text-red-600" />, text: b.slice(2), bg: "text-error/80" };
+    if (b.startsWith("⚠")) return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-on-surface-variant" />, text: b.slice(2), bg: "" };
+    return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-on-surface-variant" />, text: b, bg: "" };
   };
 
   return (
-    <div className="border border-border rounded-lg p-8 bg-surface shadow-sm">
-      <div className="flex items-start justify-between mb-6">
-        <h2 className="text-xs uppercase tracking-widest text-textSecondary font-medium">
-          Verification Result
-        </h2>
-        {mode && (
-          <span className="text-xs text-textSecondary/60 border border-border px-2 py-0.5 rounded">
-            {mode === "fast" ? "Quick Scan" : "Deep Analysis"}
-          </span>
-        )}
-      </div>
-
-      <div className="flex items-center gap-10">
-        <div className="relative flex-shrink-0">
-          <svg width="120" height="120" viewBox="0 0 100 100" className="trust-ring">
-            <circle cx="50" cy="50" r="45" className="trust-ring-track" />
-            <circle
-              cx="50"
-              cy="50"
-              r="45"
-              className="trust-ring-fill animate-ringFill"
-              stroke={ringColor}
-              strokeDashoffset={offset}
-            />
-          </svg>
-          <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-3xl font-light text-primary">{pct}</span>
-            <span className="text-[10px] uppercase tracking-wider text-textSecondary">Trust</span>
-          </div>
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <div className={`text-lg font-normal mb-4 ${verdictColor}`}>{verdict}</div>
-
-          <div className="space-y-2">
-            {data.summary_bullets?.map((b, i) => {
-              const { symbol, text, color } = formatBullet(b);
-              return (
-                <div key={i} className="flex items-start gap-2.5 text-sm">
-                  <span className={`${color} font-medium flex-shrink-0 w-3 text-center`}>{symbol}</span>
-                  <span className="text-text font-light">{text}</span>
-                </div>
-              );
-            })}
+    <div className="grid grid-cols-2 gap-px bg-outline-variant/10 border border-outline-variant/10">
+      <div className="bg-surface-container p-8 flex flex-col items-center justify-center gap-4">
+        <div className="relative w-32 h-32 flex items-center justify-center">
+          <div className="absolute inset-0 rounded-full opacity-20" style={ringStyle}></div>
+          <div className="text-center">
+            <div className="text-3xl font-light tracking-tighter">{pct}%</div>
+            <div className="text-[10px] uppercase tracking-widest text-secondary">Confidence</div>
           </div>
         </div>
       </div>
 
-      {data.signals && (
-        <div className="mt-8 pt-6 border-t border-border grid grid-cols-2 gap-6">
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-xs text-textSecondary">
-              <span>Response Relevance</span>
-              <span>{Math.round((data.signals.qa_relevance ?? 0) * 100)}%</span>
-            </div>
-            <div className="w-full bg-background rounded-full h-1 overflow-hidden border border-border">
-              <div
-                className="bg-accent h-full rounded-full transition-all duration-700"
-                style={{ width: `${(data.signals.qa_relevance ?? 0) * 100}%` }}
-              />
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <div className="flex justify-between text-xs text-textSecondary">
-              <span>Factual Confidence</span>
-              <span>{Math.round((data.signals.epistemic_trust ?? 0) * 100)}%</span>
-            </div>
-            <div className="w-full bg-background rounded-full h-1 overflow-hidden border border-border">
-              <div
-                className="bg-accent h-full rounded-full transition-all duration-700"
-                style={{ width: `${(data.signals.epistemic_trust ?? 0) * 100}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <div className="bg-surface-container p-8">
+        <h4 className="text-[10px] uppercase text-outline mb-4">Evidence Log</h4>
+        <ul className="space-y-3 text-xs font-light text-on-surface">
+          {data.summary_bullets?.map((b, i) => {
+            const { symbol, text, bg } = formatBullet(b);
+            return (
+              <li key={i} className="flex items-start gap-3">
+                <div className="mt-0.5 shrink-0">{symbol}</div>
+                <span className={bg || "text-on-surface"}>{text}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
   );
 }

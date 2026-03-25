@@ -28,7 +28,7 @@ export default function Navbar() {
           onClick={() => scrollTo("hero")}
           className="text-base font-medium tracking-tight text-primary"
         >
-          TrustLayer
+          Veritas AI
         </button>
 
         <div className="flex items-center gap-8">

@@ -8,11 +8,11 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: "TrustLayer — AI Response Verification",
+  title: "Veritas AI — AI Response Verification",
   description:
-    "Verify any AI response instantly. TrustLayer extracts claims, cross-references evidence, and scores trust in real time.",
+    "Verify any AI response instantly. Veritas AI extracts claims, cross-references evidence, and scores trust in real time.",
   openGraph: {
-    title: "TrustLayer — AI Response Verification",
+    title: "Veritas AI — AI Response Verification",
     description:
       "Verify any AI response instantly. Extract claims, cross-reference evidence, and score trust.",
     type: "website",

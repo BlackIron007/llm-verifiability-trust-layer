@@ -6,13 +6,13 @@ def generate_confidence_explanation(claim):
     explanations = []
 
     if getattr(claim, "support_strength", 0) > 0.6:
-        explanations.append("Strong supporting evidence found.")
+        explanations.append("High model confidence — strong corroborating evidence.")
 
     elif getattr(claim, "support_strength", 0) > 0.3:
-        explanations.append("Moderate supporting evidence found.")
+        explanations.append("Weak or insufficient evidence found.")
 
     else:
-        explanations.append("Limited supporting evidence available.")
+        explanations.append("No credible supporting evidence found.")
 
     if getattr(claim, "contradiction_strength", 0) > 0.5:
         explanations.append("Significant contradictory evidence detected.")

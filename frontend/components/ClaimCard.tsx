@@ -2,16 +2,13 @@
 
 import { useState } from "react";
 import { explainClaim } from "../lib/api";
+import { Database, AlignLeft, TrendingUp, MessageSquare, AlertCircle } from "lucide-react";
 
 interface Evidence {
   source?: string;
   domain?: string;
   evidence?: string;
   url?: string;
-  support_label?: string;
-  support_score?: number;
-  similarity?: number;
-  source_trust?: number;
 }
 
 interface ScoreBreakdown {
@@ -22,13 +19,15 @@ interface ScoreBreakdown {
 
 interface ClaimData {
   text: string;
+  resolved_text?: string;
   claim_type?: string;
   risk_level?: string;
   verifiability_score?: number;
+  support_strength?: number;
+  contradiction_strength?: number;
   confidence_explanation?: string[];
   score_breakdown?: ScoreBreakdown;
   evidence?: Evidence[];
-  qa_consistent?: boolean;
 }
 
 interface ClaimCardProps {
@@ -37,17 +36,11 @@ interface ClaimCardProps {
   onMouseLeave?: () => void;
 }
 
-const CLAIM_TYPE_LABELS: Record<string, { label: string; style: string }> = {
-  hard_fact: { label: "Hard Fact", style: "border-primary/30 text-primary" },
-  soft_fact: { label: "Soft Fact", style: "border-accent/40 text-accent" },
-  opinion: { label: "Opinion", style: "border-textSecondary/30 text-textSecondary" },
-  prediction: { label: "Prediction", style: "border-trust-medium/40 text-trust-medium" },
-};
-
-const RISK_LABELS: Record<string, { label: string; color: string }> = {
-  low: { label: "Well Supported", color: "text-trust-high" },
-  medium: { label: "Partially Verified", color: "text-trust-medium" },
-  high: { label: "Unverified", color: "text-trust-low" },
+const TYPE_SYMBOLS: Record<string, React.ReactNode> = {
+  hard_fact: <Database strokeWidth={1.5} className="w-4 h-4" />,
+  soft_fact: <AlignLeft strokeWidth={1.5} className="w-4 h-4" />,
+  opinion: <MessageSquare strokeWidth={1.5} className="w-4 h-4" />,
+  prediction: <TrendingUp strokeWidth={1.5} className="w-4 h-4" />,
 };
 
 export default function ClaimCard({ claim, onMouseEnter, onMouseLeave }: ClaimCardProps) {
@@ -58,8 +51,8 @@ export default function ClaimCard({ claim, onMouseEnter, onMouseLeave }: ClaimCa
     error_category?: string | null;
   } | null>(null);
 
-  const riskInfo = RISK_LABELS[claim.risk_level || ""] || { label: "Unknown", color: "text-textSecondary" };
-  const typeInfo = CLAIM_TYPE_LABELS[claim.claim_type || ""];
+  const riskScore = ((claim.verifiability_score ?? 0) * 100).toFixed(0);
+  const typeSymbol = TYPE_SYMBOLS[claim.claim_type || ""] || <AlignLeft strokeWidth={1.5} className="w-4 h-4" />;
 
   const handleToggle = async () => {
     const newState = !open;
@@ -78,141 +71,119 @@ export default function ClaimCard({ claim, onMouseEnter, onMouseLeave }: ClaimCa
 
   return (
     <div
-      className="border border-border rounded-lg p-6 bg-background shadow-sm hover:shadow-md hover:scale-[1.005] transition-all duration-300"
+      className="border-b border-outline-variant/20 py-6 group transition-colors hover:bg-surface-container-low/50"
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
     >
-      {/* Header row */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex-1 min-w-0">
-          {typeInfo && (
-            <span className={`inline-block text-[10px] uppercase tracking-wider border px-2 py-0.5 rounded mb-2 ${typeInfo.style}`}>
-              {typeInfo.label}
-            </span>
-          )}
-          <p className="text-base text-text leading-relaxed font-light">{claim.text}</p>
-        </div>
-        <div className={`text-right flex-shrink-0 ${riskInfo.color}`}>
-          <div className="text-sm font-medium whitespace-nowrap">{riskInfo.label}</div>
-          <div className="text-xs font-light opacity-70 mt-0.5">
-            {((claim.verifiability_score ?? 0) * 100).toFixed(0)}% risk
+      <div className="flex items-start justify-between gap-6 px-4">
+        <div className="flex items-start gap-4 flex-1">
+          <div className="text-primary mt-0.5 shrink-0">{typeSymbol}</div>
+          <div className="flex-1">
+            <p className="text-sm font-light leading-relaxed text-on-surface">{claim.text}</p>
+            {claim.resolved_text && claim.resolved_text !== claim.text && (
+              <p className="text-[11px] text-tertiary mt-1.5 italic">
+                → Interpreted as: “{claim.resolved_text}”
+              </p>
+            )}
+            {claim.confidence_explanation?.[0] && (
+              <p className="text-[11px] text-secondary mt-2 opacity-80">{claim.confidence_explanation[0]}</p>
+            )}
+            {(claim.contradiction_strength ?? 0) > 0.3 && (
+              <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-error border border-error/20 bg-error/5 px-2 py-0.5">
+                Contradicted by evidence
+              </span>
+            )}
+            {(claim.support_strength ?? 0) < 0.3 && (claim.contradiction_strength ?? 0) <= 0.3 && claim.claim_type !== "opinion" && (
+              <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-outline border border-outline-variant/20 bg-surface-container-low px-2 py-0.5">
+                No supporting evidence
+              </span>
+            )}
           </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-2 flex-shrink-0">
+          <div className="text-[10px] uppercase font-mono text-outline-variant">{riskScore}% Risk</div>
+          <button
+            onClick={handleToggle}
+            className="text-[10px] uppercase tracking-wider text-primary hover:text-primary-dim transition-colors"
+          >
+            {open ? "Close" : "Inspect"}
+          </button>
         </div>
       </div>
 
-      {/* First explanation line */}
-      {claim.confidence_explanation?.[0] && (
-        <div className="mt-3 text-sm text-textSecondary font-light leading-relaxed">
-          {claim.confidence_explanation[0]}
-        </div>
-      )}
-
-      {/* Toggle button */}
-      <button
-        onClick={handleToggle}
-        className="mt-4 text-sm text-accent hover:text-primary transition-colors duration-200 focus:outline-none"
-      >
-        {open ? "Hide Details" : "View Reasoning"}
-      </button>
-
-      {/* Expanded details */}
       {open && (
-        <div className="mt-5 pt-5 border-t border-border animate-fadeIn">
-          {/* Score breakdown with user-friendly labels */}
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-textSecondary">
-                <span>Source Verification</span>
+        <div className="mt-6 mx-4 p-6 bg-surface-container-low border border-outline-variant/20 animate-fadeIn">
+          <div className="grid grid-cols-3 gap-8 mb-8">
+            <div className="space-y-2">
+              <div className="flex justify-between text-[9px] uppercase tracking-wider text-outline">
+                <span>Model Confidence</span>
                 <span>{((claim.score_breakdown?.support ?? 0) * 100).toFixed(0)}%</span>
               </div>
-              <div className="w-full bg-surface rounded-full h-1.5 overflow-hidden border border-border">
-                <div
-                  className="bg-trust-high h-full rounded-full transition-all duration-500"
-                  style={{ width: `${(claim.score_breakdown?.support ?? 0) * 100}%` }}
-                />
+              <div className="w-full bg-surface-variant h-[2px]">
+                <div className="bg-tertiary h-full" style={{ width: `${(claim.score_breakdown?.support ?? 0) * 100}%` }} />
               </div>
             </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-textSecondary">
-                <span>Answer Relevance</span>
+            <div className="space-y-2">
+              <div className="flex justify-between text-[9px] uppercase tracking-wider text-outline">
+                <span>Relevance</span>
                 <span>{((claim.score_breakdown?.qa_alignment ?? 0) * 100).toFixed(0)}%</span>
               </div>
-              <div className="w-full bg-surface rounded-full h-1.5 overflow-hidden border border-border">
-                <div
-                  className="bg-accent h-full rounded-full transition-all duration-500"
-                  style={{ width: `${(claim.score_breakdown?.qa_alignment ?? 0) * 100}%` }}
-                />
+              <div className="w-full bg-surface-variant h-[2px]">
+                <div className="bg-primary h-full" style={{ width: `${(claim.score_breakdown?.qa_alignment ?? 0) * 100}%` }} />
               </div>
             </div>
-
-            <div className="space-y-1.5">
-              <div className="flex justify-between text-xs text-textSecondary">
-                <span>Conflicting Sources</span>
+            <div className="space-y-2">
+              <div className="flex justify-between text-[9px] uppercase tracking-wider text-outline">
+                <span>Conflict</span>
                 <span>{((claim.score_breakdown?.contradictions ?? 0) * 100).toFixed(0)}%</span>
               </div>
-              <div className="w-full bg-surface rounded-full h-1.5 overflow-hidden border border-border">
-                <div
-                  className="bg-trust-low h-full rounded-full transition-all duration-500"
-                  style={{ width: `${(claim.score_breakdown?.contradictions ?? 0) * 100}%` }}
-                />
+              <div className="w-full bg-surface-variant h-[2px]">
+                <div className="bg-error h-full" style={{ width: `${(claim.score_breakdown?.contradictions ?? 0) * 100}%` }} />
               </div>
             </div>
           </div>
 
-          {/* Evidence sources */}
           {claim.evidence && claim.evidence.length > 0 && (
-            <div className="mt-6 space-y-4">
-              <h4 className="text-xs uppercase tracking-wider text-textSecondary font-medium">
-                Sources
-              </h4>
-              {claim.evidence.map((ev, idx) => (
-                <div key={idx} className="flex gap-3 text-sm">
-                  <img
-                    src={`https://www.google.com/s2/favicons?domain=${ev.domain || ""}&sz=32`}
-                    className="w-4 h-4 mt-0.5 rounded-sm opacity-80"
-                    alt=""
-                  />
-                  <div className="min-w-0">
-                    <div className="font-medium text-text">
+            <div className="space-y-4 mb-6">
+              <h5 className="text-[9px] uppercase tracking-widest text-outline">Cross-Referenced Sources</h5>
+              <div className="space-y-3">
+                {claim.evidence.map((ev, idx) => (
+                  <div key={idx} className="flex gap-3 text-xs font-light text-on-surface">
+                    <span className="text-secondary">·</span>
+                    <div>
                       {ev.url ? (
-                        <a
-                          href={ev.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:text-accent transition-colors"
-                        >
+                        <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                           {ev.domain || ev.source}
                         </a>
                       ) : (
-                        ev.domain || ev.source
+                        <span className="text-on-surface-variant">{ev.domain || ev.source}</span>
                       )}
-                    </div>
-                    <div className="text-textSecondary font-light leading-relaxed mt-1 break-words">
-                      &ldquo;{ev.evidence}&rdquo;
+                      <p className="text-[11px] text-secondary mt-1">&quot;{ev.evidence}&quot;</p>
                     </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
 
-          {/* AI explanation */}
-          <div className="mt-6 p-4 bg-surface rounded text-sm text-textSecondary font-light leading-relaxed border border-border">
+          <div className="pt-4 border-t border-outline-variant/20">
             {isExplaining ? (
               <div className="animate-pulse space-y-2">
-                <div className="h-2 bg-border rounded w-full" />
-                <div className="h-2 bg-border rounded w-5/6" />
-                <div className="h-2 bg-border rounded w-4/6" />
+                <div className="h-2 bg-outline-variant/20 w-full" />
+                <div className="h-2 bg-outline-variant/20 w-4/5" />
               </div>
             ) : explanationData ? (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {explanationData.error_category && (
-                  <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-trust-low/10 text-trust-low text-xs font-medium border border-trust-low/20">
-                    △ {explanationData.error_category}
+                  <span className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-error/20 bg-error/5 text-[9px] uppercase tracking-wider mb-2 text-error/90">
+                    <AlertCircle strokeWidth={1.5} className="w-3 h-3" />
+                    {explanationData.error_category}
                   </span>
                 )}
-                <p className="text-text">{explanationData.explanation}</p>
+                <p className="text-[11px] leading-relaxed text-on-surface-variant">
+                  {explanationData.explanation}
+                </p>
               </div>
             ) : null}
           </div>

@@ -39,3 +39,17 @@ export async function explainClaim(claimText: string) {
 
   return res.json();
 }
+
+export async function fetchRecentVerifications() {
+  const res = await fetch("/api/v1/recent_verifications", {
+    headers: {
+      "X-API-Key": process.env.NEXT_PUBLIC_API_KEY || "",
+    },
+  });
+
+  if (!res.ok) {
+    return [];
+  }
+
+  return res.json();
+}

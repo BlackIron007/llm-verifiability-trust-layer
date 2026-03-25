@@ -47,6 +47,8 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
+from app.modules.coreference_resolver import resolve_coreferences
+from app.services.verification_store import init_db, save_verification, get_recent_verifications
 from collections import defaultdict
 from pydantic import BaseModel
 import re
@@ -83,6 +85,7 @@ async def lifespan(app: FastAPI):
             list(executor.map(_fetch_evidence, warmup_queries))
 
     await loop.run_in_executor(None, run_warmup)
+    init_db()
     logger.info("Application startup: Models are warm and ready.")
     yield
     
@@ -198,6 +201,11 @@ def _finalize_claim_processing(claim, question):
         penalty = claim.contradiction_strength * 0.5
         claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
 
+    # Force HIGH risk when contradiction is detected
+    if claim.contradiction_strength > 0.3:
+        claim.risk_level = RiskLevel.HIGH
+        claim.verifiability_score = max(0.7, claim.verifiability_score or 0.7)
+
     is_consistent, sim = check_question_claim_consistency(question, claim.text)
     claim.qa_consistent = is_consistent
     claim.qa_similarity = round(sim, 3)
@@ -208,6 +216,9 @@ def _finalize_claim_processing(claim, question):
         claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.10)
     elif claim.support_strength > 0.3:
         claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.05)
+    elif claim.support_strength < 0.3 and claim.claim_type != ClaimType.OPINION:
+        # No credible supporting evidence — increase risk
+        claim.verifiability_score = max(0.6, claim.verifiability_score or 0.5)
 
     claim = calibrate_claim_trust(claim)
 
@@ -218,6 +229,10 @@ def _finalize_claim_processing(claim, question):
     
     claim.verifiability_score = round(claim.verifiability_score or 0, 3)
     claim.risk_level = compute_risk_level(claim.verifiability_score)
+
+    # Final override: contradiction always means HIGH risk regardless of other adjustments
+    if claim.contradiction_strength > 0.3:
+        claim.risk_level = RiskLevel.HIGH
 
     claim.score_breakdown = {
         "support": claim.support_strength,
@@ -236,6 +251,9 @@ def _finalize_claim_processing(claim, question):
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
+
+    # Coreference resolution: resolve pronouns across ordered claims
+    claims = resolve_coreferences(claims)
     
     try:
         sentences = sent_tokenize(answer)
@@ -419,9 +437,9 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     if avg_support >= 0.7:
         summary_bullets.append("✔ Strong overall evidence support")
     elif avg_support >= 0.4:
-        summary_bullets.append("⚠ Moderate evidence support")
+        summary_bullets.append("⚠ Weak or insufficient evidence")
     else:
-        summary_bullets.append("❌ Weak or missing evidence")
+        summary_bullets.append("❌ No credible supporting evidence")
 
     is_safe = epistemic_trust >= 0.6 and not contradictions
     
@@ -451,7 +469,18 @@ def verify_llm_response(
     mode = payload.mode
     client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Verify LLM response request from IP: {client_ip} in '{mode}' mode.")
-    return _core_verify(payload.question, payload.answer, mode=mode)
+    result = _core_verify(payload.question, payload.answer, mode=mode)
+    
+    # Persist to SQLite
+    save_verification(payload.answer[:500], result.overall_trust_score, mode)
+    
+    return result
+
+@router.get("/recent_verifications")
+@limiter.limit("30/minute")
+def recent_verifications(request: Request):
+    """Return the most recent verification results from SQLite."""
+    return get_recent_verifications(limit=10)
 
 async def stream_verification(question: str, answer: str):
     """

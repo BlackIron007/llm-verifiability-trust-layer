@@ -10,54 +10,32 @@
   }
 
   body {
-    font-weight: 300;
-    line-height: 1.7;
-    letter-spacing: 0.01em;
+    background-color: #fff9ee;
+    color: #373223;
   }
 
   ::selection {
-    background-color: #e8e2d8;
-    color: #2c2218;
+    background-color: #ebe2cb;
+    color: #373223;
   }
 
   ::-webkit-scrollbar {
     width: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #faf8f3;
+    background: #faf3e5;
   }
   ::-webkit-scrollbar-thumb {
-    background: #e8e2d8;
+    background: #b9b29c;
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #8b7355;
+    background: #817a67;
   }
 }
 
-@layer components {
-  .section-reveal {
-    opacity: 0;
-    transform: translateY(24px);
-    animation: fadeInUp 0.6s ease-out forwards;
-  }
-
-  .trust-ring {
-    transform: rotate(-90deg);
-    transform-origin: center;
-  }
-
-  .trust-ring-track {
-    fill: none;
-    stroke: #e8e2d8;
-    stroke-width: 3;
-  }
-
-  .trust-ring-fill {
-    fill: none;
-    stroke-width: 3;
-    stroke-linecap: round;
-    stroke-dasharray: 283;
-    transition: stroke-dashoffset 1s ease-out;
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }

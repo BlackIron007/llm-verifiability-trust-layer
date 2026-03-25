@@ -33,4 +33,5 @@ class Claim(BaseModel):
     support_strength: float | None = None
     contradiction_strength: float | None = None
     confidence_explanation: list[str] | None = None
+    resolved_text: Optional[str] = None
     score_breakdown: Optional[Dict[str, Any]] = None
