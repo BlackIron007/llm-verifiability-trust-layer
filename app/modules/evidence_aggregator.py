@@ -40,6 +40,9 @@ def aggregate_evidence(evidence_list):
         support_score = ev.support_score or 0.0
         label = ev.support_label or "neutral"
 
+        if (ev.similarity or 0) < 0.5 and label == "supports":
+            label = "neutral"
+
         if support_score < CONFIDENCE_THRESHOLD:
             label = "neutral"
 

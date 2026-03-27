@@ -16,6 +16,12 @@ class RiskLevel(str, Enum):
     MEDIUM = "medium"
     HIGH = "high"
 
+class VerificationStatus(str, Enum):
+    SUPPORTED = "SUPPORTED"
+    UNSUPPORTED = "UNSUPPORTED"
+    UNVERIFIABLE = "UNVERIFIABLE"
+    CONTRADICTED = "CONTRADICTED"
+
 class Claim(BaseModel):
     id: Optional[int] = None
     text: str
@@ -24,6 +30,7 @@ class Claim(BaseModel):
     start_char: Optional[int] = None
     end_char: Optional[int] = None
     risk_level: Optional[RiskLevel] = None
+    verification_status: Optional[VerificationStatus] = None
     explanation: Optional[str] = None
     secondary_explanation: Optional[str] = None
     tertiary_explanation: Optional[str] = None

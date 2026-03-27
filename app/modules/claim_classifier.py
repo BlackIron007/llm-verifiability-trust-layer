@@ -57,6 +57,11 @@ def classify_claim(claim: Claim) -> Claim:
     except Exception:
         claim.claim_type = ClaimType.SOFT_FACT
 
+    from app.modules.coreference_resolver import _extract_named_entities
+    entities = _extract_named_entities(claim.text)
+    if entities and len(claim.text.split()) > 3:
+        claim.claim_type = ClaimType.HARD_FACT
+
     set_cached_classification(claim.text, claim.claim_type)
 
     return claim

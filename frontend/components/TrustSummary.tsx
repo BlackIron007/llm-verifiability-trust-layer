@@ -23,23 +23,36 @@ export default function TrustSummary({ data }: TrustSummaryProps) {
     background: `conic-gradient(#715b3e 0% ${pct}%, #ebe2cb ${pct}% 100%)`,
   };
 
-  const formatBullet = (b: string) => {
-    if (b.startsWith("✔")) return { symbol: <Check strokeWidth={1.5} className="w-4 h-4 text-emerald-600" />, text: b.slice(2), bg: "" };
-    if (b.startsWith("❌")) return { symbol: <AlertCircle strokeWidth={1.5} className="w-4 h-4 text-red-600" />, text: b.slice(2), bg: "text-error/80" };
-    if (b.startsWith("⚠")) return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-on-surface-variant" />, text: b.slice(2), bg: "" };
-    return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-on-surface-variant" />, text: b, bg: "" };
+  const formatBullet = (text: string) => {
+    if (text === "Mostly correct and highly verified" || text === "Internally consistent" || text === "Strong overall evidence support") {
+      return { symbol: <Check strokeWidth={1.5} className="w-4 h-4 text-emerald-600" />, text, bg: "" };
+    }
+    if (text === "Factually incorrect" || text === "Internal contradictions detected" || text === "No credible source supports this claim") {
+      return { symbol: <AlertCircle strokeWidth={1.5} className="w-4 h-4 text-red-600" />, text, bg: "text-error/80" };
+    }
+    if (text === "Mixed factual accuracy" || text === "Weak or insufficient evidence") {
+      return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-amber-500" />, text, bg: "" };
+    }
+    return { symbol: <Minus strokeWidth={1.5} className="w-4 h-4 text-on-surface-variant" />, text, bg: "" };
   };
 
   return (
     <div className="grid grid-cols-2 gap-px bg-outline-variant/10 border border-outline-variant/10">
       <div className="bg-surface-container p-8 flex flex-col items-center justify-center gap-4">
-        <div className="relative w-32 h-32 flex items-center justify-center">
+        <div className="relative w-32 h-32 flex shrink-0 items-center justify-center">
           <div className="absolute inset-0 rounded-full opacity-20" style={ringStyle}></div>
           <div className="text-center">
             <div className="text-3xl font-light tracking-tighter">{pct}%</div>
             <div className="text-[10px] uppercase tracking-widest text-secondary">Confidence</div>
           </div>
         </div>
+        
+        {pct <= 50 && (
+          <div className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-error/10 text-error rounded-full text-[9px] uppercase tracking-widest font-medium w-max">
+            <AlertCircle strokeWidth={2} className="w-3.5 h-3.5" /> 
+            <span>Likely Hallucinated</span>
+          </div>
+        )}
       </div>
 
       <div className="bg-surface-container p-8">

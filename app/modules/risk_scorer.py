@@ -8,6 +8,8 @@ BASE_RISK_MAP = {
     ClaimType.OPINION: 0.2
 }
 
+import re
+
 def assign_baseline_risk(claim: Claim) -> Claim:
     """
     Assigns baseline verifiability score and risk level
@@ -18,6 +20,10 @@ def assign_baseline_risk(claim: Claim) -> Claim:
         return claim
 
     base_score = BASE_RISK_MAP.get(claim.claim_type, 0.5)
+
+    if claim.claim_type == ClaimType.HARD_FACT and re.search(r'\b(?:1[0-9]{3}|20[0-2][0-9])\b', claim.text):
+        base_score = max(base_score, 0.5)
+
     claim.verifiability_score = base_score
 
     claim.risk_level = compute_risk_level(base_score)
@@ -65,11 +71,9 @@ def compute_overall_trust_score(claims: List[Claim]) -> float:
         claim_trust = support - contradiction
         claim_trust = max(0.05, min(1.0, claim_trust))
 
-        # Contradiction detected → hard cap
         if contradiction > 0.3:
             claim_trust = min(claim_trust, 0.1)
 
-        # No credible supporting evidence → cap low
         if support < 0.3:
             claim_trust = min(claim_trust, 0.15)
 
@@ -78,12 +82,9 @@ def compute_overall_trust_score(claims: List[Claim]) -> float:
     if not per_claim_trusts:
         return 1.0
 
-    # Product scoring: multiple bad claims compound exponentially
     overall = 1.0
     for t in per_claim_trusts:
         overall *= t
-
-    # Normalize: take the geometric mean so single-claim inputs aren't unfairly low
     n = len(per_claim_trusts)
     overall = overall ** (1.0 / n) if n > 1 else overall
 

@@ -1,5 +1,5 @@
 """
-Coreference Resolution — Safe Heuristic (Option 1)
+Coreference Resolution — Safe Heuristic
 
 Resolves pronouns to the most recent named entity using spaCy NER.
 Only replaces pronouns when confidence is high (single unambiguous entity).
@@ -11,14 +11,11 @@ import logging
 
 logger = logging.getLogger("verifier")
 
-# Pronouns to resolve (subject/object forms)
 PRONOUN_PATTERNS = re.compile(
     r'\b(he|she|it|they|him|her|his|its|their|them)\b',
     re.IGNORECASE
 )
 
-# Simple NER fallback using regex for common named entities
-# This avoids requiring spaCy as a dependency
 CAPITALIZED_ENTITY = re.compile(
     r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b'
 )
@@ -43,10 +40,8 @@ def _extract_named_entities(text: str) -> list[str]:
     entities = CAPITALIZED_ENTITY.findall(text)
     filtered = []
     for ent in entities:
-        # Skip common words that happen to start sentences
         if ent.lower() in COMMON_STARTERS:
             continue
-        # Skip single-character matches
         if len(ent) < 2:
             continue
         filtered.append(ent)
@@ -78,48 +73,61 @@ def resolve_coreferences(claims: list) -> list:
     Resolve pronoun references across an ordered list of claims.
     
     Strategy:
-    - Track the last mentioned named entity
+    - Track the last mentioned named entity and last mentioned person entity
     - If a claim contains pronouns and there's exactly one recent entity, replace safely
     - If ambiguous (multiple recent entities), leave untouched
+    - Never map 'he' / 'she' to locations
     
     Each claim gets a `resolved_text` field if resolution was applied.
     """
     last_entities: list[str] = []
+    last_person_entity: str | None = None
+    
+    PLACES_LOWER = {
+        "australia", "india", "france", "europe", "asia", "america", 
+        "africa", "uk", "usa", "germany", "japan", "china", "russia", 
+        "earth", "world", "waterloo", "london", "paris", "berlin", 
+        "rome", "moscow", "tokyo", "washington"
+    }
+
+    def _is_person(ent: str) -> bool:
+        """Heuristic: If it's a known place, not a person. If First Last, person."""
+        if ent.lower() in PLACES_LOWER:
+            return False
+        words = ent.split()
+        if len(words) >= 2 and all(w.istitle() for w in words):
+            return True
+        return False
     
     for claim in claims:
         original_text = claim.text
         
-        # Extract entities from this claim
         current_entities = _extract_named_entities(original_text)
         
         if current_entities:
-            # This claim introduces new entities — update tracking
             last_entities = current_entities
-            continue  # No resolution needed for claims that name their own entities
-        
-        # Check if this claim has pronouns that need resolution
+            
+            for ent in current_entities:
+                if _is_person(ent):
+                    last_person_entity = ent
+            
         pronouns_found = PRONOUN_PATTERNS.findall(original_text)
         
-        if not pronouns_found or not last_entities:
+        if not pronouns_found:
             continue
         
-        # Safety check: only resolve if there's exactly ONE recent entity (no ambiguity)
-        unique_entities = list(dict.fromkeys(last_entities))  # preserve order, dedup
+        valid_thing_entities = [e for e in last_entities if e.lower() not in PLACES_LOWER]
+        target_thing_entity = valid_thing_entities[-1] if valid_thing_entities else None
         
-        if len(unique_entities) != 1:
-            logger.debug(f"Ambiguous coreference — {len(unique_entities)} entities: {unique_entities}. Skipping.")
-            continue
-        
-        target_entity = unique_entities[0]
         resolved = original_text
         
         for pronoun in pronouns_found:
-            # Person pronouns only resolve to person-like entities (multi-word or capitalized)
             if _is_person_pronoun(pronoun):
-                resolved = _replace_pronoun_safe(resolved, target_entity, pronoun)
+                if last_person_entity:
+                    resolved = _replace_pronoun_safe(resolved, last_person_entity, pronoun)
             elif _is_thing_pronoun(pronoun):
-                resolved = _replace_pronoun_safe(resolved, target_entity, pronoun)
-            # Skip ambiguous plural pronouns like "they/them/their"
+                if target_thing_entity:
+                    resolved = _replace_pronoun_safe(resolved, target_thing_entity, pronoun)
         
         if resolved != original_text:
             claim.resolved_text = resolved

@@ -23,6 +23,7 @@ interface ClaimData {
   claim_type?: string;
   risk_level?: string;
   verifiability_score?: number;
+  verification_status?: string;
   support_strength?: number;
   contradiction_strength?: number;
   confidence_explanation?: string[];
@@ -82,20 +83,30 @@ export default function ClaimCard({ claim, onMouseEnter, onMouseLeave }: ClaimCa
             <p className="text-sm font-light leading-relaxed text-on-surface">{claim.text}</p>
             {claim.resolved_text && claim.resolved_text !== claim.text && (
               <p className="text-[11px] text-tertiary mt-1.5 italic">
-                → Interpreted as: “{claim.resolved_text}”
+                → Interpreted as: “{claim.resolved_text}” <span className="opacity-70 not-italic ml-1">(Pronoun resolved)</span>
               </p>
             )}
             {claim.confidence_explanation?.[0] && (
               <p className="text-[11px] text-secondary mt-2 opacity-80">{claim.confidence_explanation[0]}</p>
             )}
-            {(claim.contradiction_strength ?? 0) > 0.3 && (
+            {claim.verification_status === "CONTRADICTED" && (
               <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-error border border-error/20 bg-error/5 px-2 py-0.5">
-                Contradicted by evidence
+                CONTRADICTED
               </span>
             )}
-            {(claim.support_strength ?? 0) < 0.3 && (claim.contradiction_strength ?? 0) <= 0.3 && claim.claim_type !== "opinion" && (
+            {claim.verification_status === "UNSUPPORTED" && (
               <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-outline border border-outline-variant/20 bg-surface-container-low px-2 py-0.5">
-                No supporting evidence
+                UNSUPPORTED
+              </span>
+            )}
+            {claim.verification_status === "UNVERIFIABLE" && (
+              <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-secondary border border-secondary/20 bg-secondary/5 px-2 py-0.5">
+                UNVERIFIABLE
+              </span>
+            )}
+            {claim.verification_status === "SUPPORTED" && (
+              <span className="inline-block mt-2 text-[9px] uppercase tracking-wider text-primary border border-primary/20 bg-primary/5 px-2 py-0.5">
+                SUPPORTED
               </span>
             )}
           </div>
@@ -126,7 +137,7 @@ export default function ClaimCard({ claim, onMouseEnter, onMouseLeave }: ClaimCa
             </div>
             <div className="space-y-2">
               <div className="flex justify-between text-[9px] uppercase tracking-wider text-outline">
-                <span>Relevance</span>
+                <span>Semantic Match</span>
                 <span>{((claim.score_breakdown?.qa_alignment ?? 0) * 100).toFixed(0)}%</span>
               </div>
               <div className="w-full bg-surface-variant h-[2px]">

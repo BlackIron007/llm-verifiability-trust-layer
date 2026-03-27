@@ -96,6 +96,7 @@ def extract_claims(text: str) -> List[Claim]:
 Rules (critical):
 - Each claim MUST be a single, self-contained factual statement that preserves modifiers that change truth conditions (dates, locations, quantities, names). Do NOT split such modifiers.
   Example: Correct -> "India became independent in 1947" (ONE claim). Incorrect -> "India became independent" / "in 1947".
+- CRITICAL: DO NOT remove temporal modifiers like "later", "earlier", "eventually", "subsequently", "recently", "currently". Preserve the EXACT original wording as much as possible.
 - Do NOT include instructions, descriptions about statements, or quotes introducing a statement (e.g., "Here is the atomic statement...").
 - Do NOT include questions, imperatives, or meta text about the task.
 - Output strictly valid JSON. Do not include any text before or after JSON.
