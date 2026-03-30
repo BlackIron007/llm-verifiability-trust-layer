@@ -1,8 +1,9 @@
-import wikipedia
 from app.services.embedding_service import compute_similarity
 from app.schemas.evidence import Evidence
 import nltk
 from nltk.tokenize import sent_tokenize
+import httpx
+from urllib.parse import quote
 
 def best_sentence_match(claim_text: str, paragraph: str):
     """
@@ -73,16 +74,39 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
     and ranks them by semantic similarity to the claim.
     """
 
+    USER_AGENT = "VeritasAI/1.0 (https://github.com/BlackIron007/llm-verifiability-trust-layer; sdev43083@gmail.com)"
+    HEADERS = {"User-Agent": USER_AGENT}
+    TIMEOUT = 2.0
+
     evidence_list = []
 
     try:
-        search_results = wikipedia.search(claim_text, results=top_k)
+        search_url = (
+            "https://en.wikipedia.org/w/api.php?action=opensearch"
+            f"&search={quote(claim_text)}&limit={top_k}&namespace=0&format=json"
+        )
+        with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
+            search_response = client.get(search_url)
+            search_response.raise_for_status()
+            search_results = search_response.json()
 
-        for title in search_results:
+        page_titles = search_results[1] if len(search_results) > 1 else []
 
+        for title in page_titles:
             try:
-                page = wikipedia.page(title)
-                summary = page.summary
+                summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title)}"
+                with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
+                    summary_response = client.get(summary_url)
+                    if summary_response.status_code != 200:
+                        continue
+                    page_data = summary_response.json()
+
+                page_title = page_data.get("title", "")
+                page_url = page_data.get("content_urls", {}).get("desktop", {}).get("page", "")
+                summary = page_data.get("extract", "")
+
+                if not all([page_title, page_url, summary]):
+                    continue
 
                 JUNK_WORD_GROUPS = [
                     ["film", "movie", "motion picture"],
@@ -94,7 +118,7 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                 ]
                 
                 is_irrelevant_media = False
-                title_lower = page.title.lower()
+                title_lower = page_title.lower()
                 claim_lower = claim_text.lower()
 
                 for group in JUNK_WORD_GROUPS:
@@ -110,12 +134,12 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                 best_sentence, similarity = best_sentence_match(claim_text, summary)
 
                 if similarity >= 0.6:
-                    trust_score = compute_source_trust(page.url)
+                    trust_score = compute_source_trust(page_url)
                     evidence_list.append(
                         Evidence(
                             source="Wikipedia",
-                            title=page.title,
-                            url=page.url,
+                            title=page_title,
+                            url=page_url,
                             evidence=best_sentence,
                             similarity=round(similarity, 3),
                             source_trust=trust_score,
@@ -124,10 +148,11 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                         )
                     )
 
-            except Exception:
+            except (httpx.RequestError, Exception) as e:
+                logger.warning(f"Failed to process Wikipedia title '{title}': {e}")
                 continue
-
-    except Exception:
+    except (httpx.RequestError, Exception) as e:
+        logger.error(f"Wikipedia evidence retrieval failed: {e}")
         pass
 
     evidence_list.sort(key=lambda x: x.similarity, reverse=True)

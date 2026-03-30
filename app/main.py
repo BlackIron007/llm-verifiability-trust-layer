@@ -220,9 +220,10 @@ def _finalize_claim_processing(claim, question):
         claim.verification_status = VerificationStatus.SUPPORTED
     else:
         is_hard_fact = claim.claim_type == ClaimType.HARD_FACT
-        entities = _extract_named_entities(claim.text)
-        is_entity_year_pattern = len(entities) > 0 and re.search(r'\b\d{4}\b', claim.text)
-        is_general_entity_fact = len(entities) > 0 and len(claim.text.split()) < 15
+        effective_text = claim.resolved_text or claim.text
+        entities = _extract_named_entities(effective_text)
+        is_entity_year_pattern = len(entities) > 0 and re.search(r'\b\d{4}\b', effective_text)
+        is_general_entity_fact = len(entities) > 0 and len(effective_text.split()) < 15
 
         if is_hard_fact and (is_entity_year_pattern or is_general_entity_fact):
             logger.info(f"Evidence fallback (weak evidence override): Marking '{claim.text}' as SUPPORTED due to high-confidence pattern.")
