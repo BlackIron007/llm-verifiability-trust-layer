@@ -5,23 +5,35 @@ import re
 from app.services.claim_cache import get_cached_classification, set_cached_classification
 import logging
 
+from transformers import pipeline
+import torch
+
 logger = logging.getLogger("verifier")
 
-def classify_claim(claim: Claim) -> Claim:
-    """
-    Classifies a claim into HARD_FACT, SOFT_FACT, OPINION, or PREDICTION.
-    Updates and returns the Claim object.
-    Utilizes a cache to avoid re-classifying known claims.
-    """
+try:
+    CLASSIFIER_PIPELINE = pipeline(
+        "zero-shot-classification",
+        model="facebook/bart-large-mnli",
+        device=0 if torch.cuda.is_available() else -1
+    )
+    logger.info("Zero-shot classification pipeline loaded successfully for claim classification.")
+except Exception as e:
+    logger.error(f"Failed to load zero-shot classification pipeline, will fallback to LLM. Error: {e}")
+    CLASSIFIER_PIPELINE = None
 
-    cached_type = get_cached_classification(claim.text)
-    if cached_type is not None:
-        logger.info(f"Claim classification cache hit for: '{claim.text}'")
-        claim.claim_type = cached_type
-        return claim
-    
-    logger.info(f"Claim classification cache miss for: '{claim.text}'")
+CANDIDATE_LABELS = ["objective measurable fact", "interpretive or causal statement", "subjective judgment", "statement about the future"]
+LABEL_MAP = {
+    "objective measurable fact": ClaimType.HARD_FACT,
+    "interpretive or causal statement": ClaimType.SOFT_FACT,
+    "subjective judgment": ClaimType.OPINION,
+    "statement about the future": ClaimType.PREDICTION,
+}
 
+def _classify_claim_with_llm(claim: Claim) -> Claim:
+    """
+    Fallback classification using an external LLM.
+    """
+    logger.warning(f"Using LLM fallback for claim classification: '{claim.text}'")
     prompt = f"""
     Classify the following claim into one of these categories:
 
@@ -57,10 +69,34 @@ def classify_claim(claim: Claim) -> Claim:
     except Exception:
         claim.claim_type = ClaimType.SOFT_FACT
 
+    return claim
+
+def classify_claim(claim: Claim) -> Claim:
+    """
+    Classifies a claim using a local zero-shot model for speed, with an LLM fallback.
+    Utilizes a cache to avoid re-classifying known claims.
+    """
+
+    cached_type = get_cached_classification(claim.text)
+    if cached_type is not None:
+        logger.info(f"Claim classification cache hit for: '{claim.text}'")
+        claim.claim_type = cached_type
+        return claim
+    
+    logger.info(f"Claim classification cache miss for: '{claim.text}'")
+
     from app.modules.coreference_resolver import _extract_named_entities
-    entities = _extract_named_entities(claim.text)
-    if entities and len(claim.text.split()) > 3:
+    if _extract_named_entities(claim.text) and len(claim.text.split()) >= 3:
         claim.claim_type = ClaimType.HARD_FACT
+        set_cached_classification(claim.text, claim.claim_type)
+        return claim
+
+    if CLASSIFIER_PIPELINE:
+        result = CLASSIFIER_PIPELINE(claim.text, CANDIDATE_LABELS, multi_label=False)
+        top_label = result['labels'][0]
+        claim.claim_type = LABEL_MAP.get(top_label, ClaimType.SOFT_FACT)
+    else:
+        claim = _classify_claim_with_llm(claim)
 
     set_cached_classification(claim.text, claim.claim_type)
 

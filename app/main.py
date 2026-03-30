@@ -33,7 +33,7 @@ from app.schemas.llm_request import LLMVerificationRequest
 from app.services.relevance_service import compute_qa_relevance
 from app.services.evidence_service import retrieve_evidence
 from app.modules.consistency_checker import check_question_claim_consistency
-from app.schemas.claim import RiskLevel, ClaimType, VerificationStatus
+from app.schemas.claim import Claim, RiskLevel, ClaimType, VerificationStatus
 from app.modules.intra_answer_checker import detect_internal_contradictions
 from app.modules.evidence_aggregator import aggregate_evidence
 from app.modules.trust_calibrator import calibrate_claim_trust
@@ -47,8 +47,11 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
+from app.modules.query_rewriter import rewrite_query
+from app.modules.intra_answer_checker import check_world_knowledge_contradictions
 from app.modules.coreference_resolver import resolve_coreferences
 from app.services.verification_store import init_db, save_verification, get_recent_verifications
+from app.modules.coreference_resolver import _extract_named_entities
 from collections import defaultdict
 from pydantic import BaseModel
 import re
@@ -203,72 +206,36 @@ def _finalize_claim_processing(claim, question):
     agg = aggregate_evidence(claim.evidence)
     support = agg["support_strength"]
     contradiction = agg["contradiction_strength"]
-
-    import re
-    claim_years = set(re.findall(r'\b(?:1[0-9]{3}|20[0-2][0-9])\b', claim.text))
-    if claim_years:
-        for ev in claim.evidence:
-            ev_years = set(re.findall(r'\b(?:1[0-9]{3}|20[0-2][0-9])\b', ev.evidence))
-            if ev_years and not claim_years.intersection(ev_years):
-                support = max(0.0, support - 0.4)
-                contradiction = min(1.0, contradiction + 0.4)
-
-    claim_qualifiers = {q for q in QUALIFIER_PHRASES if q in claim.text.lower()}
-    if claim_qualifiers:
-        qualifier_mismatch_penalty = 0.0
-        for ev in claim.evidence:
-            if ev.support_label == "supports":
-                evidence_text_lower = (ev.evidence or "").lower()
-                if not any(q in evidence_text_lower for q in claim_qualifiers):
-                    qualifier_mismatch_penalty = 0.6
-                    break
-        support = max(0.0, support - qualifier_mismatch_penalty)
                 
     claim.support_strength = support
     claim.contradiction_strength = contradiction
     
-    if claim.contradiction_strength > 0.2:
-        penalty = claim.contradiction_strength * 0.5
-        claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + penalty)
-
-    if claim.contradiction_strength > 0.3:
-        claim.risk_level = RiskLevel.HIGH
-        claim.verifiability_score = max(0.7, claim.verifiability_score or 0.7)
-
     is_consistent, sim = check_question_claim_consistency(question, claim.resolved_text or claim.text)
     claim.qa_consistent = is_consistent
     claim.qa_similarity = round(sim, 3)
 
-    if claim.support_strength > 0.7:
-        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.15)
-    elif claim.support_strength > 0.5:
-        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.10)
-    elif claim.support_strength > 0.3:
-        claim.verifiability_score = max(0.05, (claim.verifiability_score or 0.3) - 0.05)
-    elif claim.support_strength < 0.3 and claim.claim_type != ClaimType.OPINION:
-        claim.verifiability_score = max(0.6, claim.verifiability_score or 0.5)
-
-    claim = calibrate_claim_trust(claim)
-    claim.confidence_explanation = generate_confidence_explanation(claim)
-    
-    if not is_consistent:
-        claim.verifiability_score = min(1.0, (claim.verifiability_score or 0) + 0.6)
-    
-    claim.verifiability_score = round(claim.verifiability_score or 0, 3)
-    
     if claim.contradiction_strength > 0.3:
         claim.verification_status = VerificationStatus.CONTRADICTED
-    elif claim.support_strength < 0.3 and claim.claim_type != ClaimType.OPINION:
-        claim.verification_status = VerificationStatus.UNSUPPORTED
-    elif claim.support_strength < 0.5 or (not is_consistent and claim.claim_type != ClaimType.OPINION):
-        claim.verification_status = VerificationStatus.UNVERIFIABLE
-    else:
+    elif claim.support_strength >= 0.5:
         claim.verification_status = VerificationStatus.SUPPORTED
+    else:
+        is_hard_fact = claim.claim_type == ClaimType.HARD_FACT
+        entities = _extract_named_entities(claim.text)
+        is_entity_year_pattern = len(entities) > 0 and re.search(r'\b\d{4}\b', claim.text)
+        is_general_entity_fact = len(entities) > 0 and len(claim.text.split()) < 15
 
+        if is_hard_fact and (is_entity_year_pattern or is_general_entity_fact):
+            logger.info(f"Evidence fallback (weak evidence override): Marking '{claim.text}' as SUPPORTED due to high-confidence pattern.")
+            claim.verification_status = VerificationStatus.SUPPORTED
+            claim.support_strength = max(claim.support_strength or 0.0, 0.8)
+        elif claim.support_strength < 0.4 and claim.claim_type != ClaimType.OPINION:
+            claim.verification_status = VerificationStatus.UNSUPPORTED
+        else:
+            claim.verification_status = VerificationStatus.UNVERIFIABLE
+
+    claim.verifiability_score = round(claim.verifiability_score or 0, 3)
     claim.risk_level = compute_risk_level(claim.verifiability_score)
-
-    if claim.contradiction_strength > 0.3:
-        claim.risk_level = RiskLevel.HIGH
+    claim.confidence_explanation = generate_confidence_explanation(claim)
 
     claim.score_breakdown = {
         "support": claim.support_strength,
@@ -287,6 +254,8 @@ def _finalize_claim_processing(claim, question):
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
     claims = extract_claims(answer)
+    for i, claim in enumerate(claims):
+        claim.original_index = i
 
     claims = resolve_coreferences(claims)
     
@@ -363,46 +332,46 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
 
     relevance_score = 0.9 if len(answer.split()) < 40 else compute_qa_relevance(question, answer)
 
-    claims_by_text = defaultdict(list)
-    text_to_risk = {}
+    query_to_claims_map = defaultdict(list)
+    query_to_risk = {}
     for claim in claims_to_process_fully:
         if claim.claim_type != ClaimType.OPINION:
             eff_text = claim.resolved_text or claim.text
-            claims_by_text[eff_text].append(claim)
-            current_risk = text_to_risk.get(eff_text, 0.0)
-            text_to_risk[eff_text] = max(current_risk, claim.verifiability_score or 0.5)
+            rewritten_query = rewrite_query(eff_text)
+            logger.info(f"Rewrote query: '{eff_text}' -> '{rewritten_query}'")
+            query_to_claims_map[rewritten_query].append(claim)
+            current_risk = query_to_risk.get(rewritten_query, 0.0)
+            query_to_risk[rewritten_query] = max(current_risk, claim.verifiability_score or 0.5)
 
-    all_unique_queries = list(claims_by_text.keys())
+    all_unique_queries = list(query_to_claims_map.keys())
 
     EXTERNAL_API_CALL_LIMIT = 2
     if len(all_unique_queries) > EXTERNAL_API_CALL_LIMIT:
         logger.info(f"Limiting {len(all_unique_queries)} potential API calls to {EXTERNAL_API_CALL_LIMIT} based on claim risk.")
-        all_unique_queries.sort(key=lambda text: text_to_risk.get(text, 0.0), reverse=True)
+        all_unique_queries.sort(key=lambda query: query_to_risk.get(query, 0.0), reverse=True)
         all_unique_queries = all_unique_queries[:EXTERNAL_API_CALL_LIMIT]
 
     evidence_map = {}
     if all_unique_queries:
         with ThreadPoolExecutor(max_workers=min(8, len(all_unique_queries))) as executor:
             future_to_query = {executor.submit(_fetch_evidence, query): query for query in all_unique_queries}
-            
-            try:
-                for future in as_completed(future_to_query, timeout=7.0):
-                    query = future_to_query[future]
-                    try:
-                        result = future.result()
-                        evidence_map[query] = result
-                    except Exception as exc:
-                        logger.error(f"Fetching evidence for '{query}' generated an exception: {exc}")
-                        evidence_map[query] = []
-            except TimeoutError:
-                logger.warning(f"Evidence gathering timed out after 7 seconds. Some evidence may be missing.")
+
+            for future in as_completed(future_to_query):
+                query = future_to_query[future]
+                try:
+                    result = future.result(timeout=7.0)
+                    evidence_map[query] = result
+                except TimeoutError:
+                    logger.warning(f"Fetching evidence for '{query}' timed out after 7 seconds.")
+                except Exception as exc:
+                    logger.error(f"Fetching evidence for '{query}' generated an exception: {exc}")
 
         for query in all_unique_queries:
             if query not in evidence_map:
                 evidence_map[query] = []
 
-    for text, claims_group in claims_by_text.items():
-        all_evidence = evidence_map.get(text, [])
+    for query, claims_group in query_to_claims_map.items():
+        all_evidence = evidence_map.get(query, [])
         
         pruned_evidence = [ev for ev in all_evidence if (ev.similarity or 0) > 0.6]
         
@@ -457,6 +426,8 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             fully_processed_claims = list(executor.map(lambda c: _finalize_claim_processing(c, question), claims_to_process_fully))
     
     final_claims = processed_claims_early + fully_processed_claims
+    
+    final_claims.sort(key=lambda c: c.original_index if hasattr(c, 'original_index') else float('inf'))
 
     for claim in final_claims:
         if claim.qa_consistent is None:
@@ -471,29 +442,11 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
                     "qa_alignment": claim.qa_similarity or 0.0
                 }
 
-    def claim_sort_key(c):
-        """
-        Defines the sorting order for claims in the final response to improve UX.
-        The tuple is sorted in reverse, so higher numbers come first.
+    internal_contradictions = detect_internal_contradictions(final_claims)
+    final_claims = check_world_knowledge_contradictions(final_claims)
 
-        1. Highest risk first (HIGH > MEDIUM > LOW).
-        2. Contradictions first, then other non-supported statuses, then supported last.
-        3. Tie-break by contradiction strength.
-        """
-        risk_order = {RiskLevel.HIGH: 2, RiskLevel.MEDIUM: 1, RiskLevel.LOW: 0}
-        risk_score = risk_order.get(c.risk_level, 0)
-
-        status_order = {
-            VerificationStatus.CONTRADICTED: 3,
-            VerificationStatus.UNSUPPORTED: 2,
-            VerificationStatus.UNVERIFIABLE: 2,
-            VerificationStatus.SUPPORTED: 1
-        }
-        status_score = status_order.get(c.verification_status, 0)
-
-        return (risk_score, status_score, c.contradiction_strength or 0.0)
-
-    final_claims.sort(key=claim_sort_key, reverse=True)
+    has_any_contradiction = any(c.verification_status == VerificationStatus.CONTRADICTED for c in final_claims)
+    is_internally_consistent = not has_any_contradiction
 
     epistemic_trust = compute_overall_trust_score(final_claims)
 
@@ -502,14 +455,8 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     if final_claims and all(c.claim_type == ClaimType.OPINION for c in final_claims) and not is_opinion_soliciting:
         epistemic_trust *= 0.3
 
-    contradictions = detect_internal_contradictions(final_claims)
-    is_internally_consistent = not bool(contradictions)
-
     if not is_internally_consistent:
-        if len(contradictions) > 1:
-            epistemic_trust = min(epistemic_trust, 0.3)
-        else:
-            epistemic_trust = min(epistemic_trust, 0.5)
+        epistemic_trust = min(epistemic_trust, 0.5)
 
     epistemic_risk = 1 - epistemic_trust
 
@@ -528,15 +475,43 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     else:
         summary_bullets.append("Internally consistent")
 
-    avg_support = sum(c.support_strength or 0 for c in final_claims) / len(final_claims) if final_claims else 0
-    if avg_support >= 0.7:
-        summary_bullets.append("Strong overall evidence support")
-    elif avg_support >= 0.4:
-        summary_bullets.append("Weak or insufficient evidence")
+    claims_with_evidence = [c for c in final_claims if c.evidence or c.support_strength is not None]
+    if claims_with_evidence:
+        avg_support = sum(c.support_strength or 0 for c in claims_with_evidence) / len(claims_with_evidence)
+        if avg_support >= 0.7:
+            summary_bullets.append("Strong overall evidence support")
+        elif avg_support >= 0.4:
+            summary_bullets.append("Weak or insufficient evidence")
+        else:
+            summary_bullets.append("No credible source supports this claim")
     else:
-        summary_bullets.append("No credible source supports this claim")
+        summary_bullets.append("No evidence was retrieved for any claim")
 
     is_safe = epistemic_trust >= 0.6 and is_internally_consistent
+
+    def claim_sort_key(c):
+        """
+        Defines the sorting order for claims in the final response to improve UX.
+        The tuple is sorted in reverse, so higher numbers come first.
+
+        1. Contradictions first, then other non-supported statuses, then supported last.
+        2. Highest risk first (HIGH > MEDIUM > LOW).
+        3. Tie-break by contradiction strength.
+        """
+        status_order = {
+            VerificationStatus.CONTRADICTED: 3,
+            VerificationStatus.UNSUPPORTED: 2,
+            VerificationStatus.UNVERIFIABLE: 2,
+            VerificationStatus.SUPPORTED: 1
+        }
+        status_score = status_order.get(c.verification_status, 0)
+
+        risk_order = {RiskLevel.HIGH: 2, RiskLevel.MEDIUM: 1, RiskLevel.LOW: 0}
+        risk_score = risk_order.get(c.risk_level, 0)
+
+        return (status_score, risk_score, c.contradiction_strength or 0.0)
+
+    final_claims.sort(key=claim_sort_key, reverse=True)
     
     signals = {
         "qa_relevance": relevance_score,
@@ -548,7 +523,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     return AnalysisResponse(
         original_text=answer,
         claims=final_claims,
-        contradictions=contradictions,
+        contradictions=internal_contradictions,
         overall_trust_score=final_trust_score,
         signals=signals,
         summary_bullets=summary_bullets,

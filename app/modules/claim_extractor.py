@@ -3,6 +3,7 @@ import re
 from typing import List
 from app.schemas.claim import Claim
 from app.services.model_client import ModelClient
+from nltk.tokenize import sent_tokenize
 
 META_PHRASES = (
     "Here is the atomic statement",
@@ -86,11 +87,10 @@ def filter_claims(claims: List[Claim]) -> List[Claim]:
     return filtered
 
 
-def extract_claims(text: str) -> List[Claim]:
+def _extract_claims_with_llm(text: str) -> List[Claim]:
     """
-    Extract atomic factual claims using LLM via OpenRouter.
+    Extracts atomic factual claims from a given text block using an LLM.
     """
-
     prompt = f'''You are a precise claim extractor. Extract only atomic, declarative statements from the provided Text. Do not add explanations, headings, or meta commentary.
 
 Rules (critical):
@@ -114,8 +114,6 @@ Text:
 '''
 
     raw_response = ModelClient.generate(prompt)
-    # print("RAW MODEL RESPONSE:")
-    # print(raw_response)
 
     json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
     if not json_match:
@@ -130,8 +128,6 @@ Text:
         else:
             cleaned_list = [re.sub(r"\\n", " ", t).strip() for t in texts if t.strip()]
         claims = [Claim(text=t) for t in cleaned_list]
-        claims = repair_split_claims(claims)
-        claims = filter_claims(claims)
         return claims
 
     json_string = json_match.group(0)
@@ -145,16 +141,46 @@ Text:
         except json.JSONDecodeError:
             texts = re.findall(r'"text"\s*:\s*"(.*?)"', raw_response, flags=re.DOTALL)
             cleaned = [re.sub(r"\\n", " ", t).strip() for t in texts if t.strip()]
-            claims = [Claim(text=t) for t in cleaned]
-            claims = repair_split_claims(claims)
-            claims = filter_claims(claims)
-            return claims
+            return [Claim(text=t) for t in cleaned]
 
     claims_data = parsed.get("claims", [])
     if not isinstance(claims_data, list):
         return []
-    claims = [Claim(text=c.get("text", "").strip()) for c in claims_data if isinstance(c, dict) and c.get("text")]
-    claims = repair_split_claims(claims)
+    return [Claim(text=c.get("text", "").strip()) for c in claims_data if isinstance(c, dict) and c.get("text")]
+
+COMPLEX_CONJUNCTIONS = re.compile(r'\b(and|but|while|whereas|although|because|since)\b', re.IGNORECASE)
+
+def extract_claims(text: str) -> List[Claim]:
+    """
+    Hybrid claim extraction: uses sentence tokenization for simple claims and
+    an LLM for complex sentences that may contain multiple claims, reducing latency.
+    """
+    try:
+        sentences = sent_tokenize(text)
+    except Exception:
+        sentences = text.split('.')
+
+    simple_claims_text = []
+    complex_sentences = []
+
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        
+        if len(sentence.split()) > 20 or COMPLEX_CONJUNCTIONS.search(sentence):
+            complex_sentences.append(sentence)
+        else:
+            simple_claims_text.append(sentence)
+
+    llm_claims = []
+    if complex_sentences:
+        complex_text = " ".join(complex_sentences)
+        llm_claims = _extract_claims_with_llm(complex_text)
+
+    initial_claims = [Claim(text=t) for t in simple_claims_text] + llm_claims
+
+    claims = repair_split_claims(initial_claims)
     claims = filter_claims(claims)
 
     seen = set()

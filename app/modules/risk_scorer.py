@@ -1,5 +1,5 @@
 from typing import List
-from app.schemas.claim import Claim, ClaimType, RiskLevel
+from app.schemas.claim import Claim, ClaimType, RiskLevel, VerificationStatus
 
 BASE_RISK_MAP = {
     ClaimType.HARD_FACT: 0.3,
@@ -21,8 +21,8 @@ def assign_baseline_risk(claim: Claim) -> Claim:
 
     base_score = BASE_RISK_MAP.get(claim.claim_type, 0.5)
 
-    if claim.claim_type == ClaimType.HARD_FACT and re.search(r'\b(?:1[0-9]{3}|20[0-2][0-9])\b', claim.text):
-        base_score = max(base_score, 0.5)
+    if claim.claim_type == ClaimType.HARD_FACT and re.search(r'\b\d{3,}\b', claim.text):
+        base_score = max(0.1, base_score - 0.15)
 
     claim.verifiability_score = base_score
 
@@ -44,48 +44,31 @@ def compute_risk_level(score: float) -> RiskLevel:
 
 def compute_overall_trust_score(claims: List[Claim]) -> float:
     """
-    Evidence-based trust scoring with exponential penalty for multiple bad claims.
-
-    For each claim:
-      - trust = support_strength - contradiction_strength, clamped to [0.05, 1.0]
-      - If no strong support (support_strength < 0.3), cap trust at 0.15
-      - If contradiction detected (contradiction_strength > 0.3), cap trust at 0.1
-
-    Overall trust = product of all per-claim trusts (exponential penalty).
-    This ensures multiple incorrect claims compound to very low scores.
+    Computes an overall trust score based on the verification status of all claims.
+    This logic is designed to be robust and intuitive.
     """
 
     if not claims:
         return 1.0
 
-    per_claim_trusts = []
+    num_claims = len(claims)
+    num_contradicted = sum(1 for c in claims if c.verification_status == VerificationStatus.CONTRADICTED)
+    num_supported = sum(1 for c in claims if c.verification_status == VerificationStatus.SUPPORTED)
+    num_unverifiable = sum(1 for c in claims if c.verification_status == VerificationStatus.UNVERIFIABLE)
 
-    for c in claims:
-        support = c.support_strength or 0.0
-        contradiction = c.contradiction_strength or 0.0
+    if num_contradicted > 0:
+        return max(0.1, 0.5 - (num_contradicted / num_claims) * 0.4)
 
-        if c.claim_type == ClaimType.OPINION:
-            per_claim_trusts.append(0.8)
-            continue
+    if num_unverifiable == num_claims:
+        return 0.5
 
-        claim_trust = support - contradiction
-        claim_trust = max(0.05, min(1.0, claim_trust))
+    score = 1.0
 
-        if contradiction > 0.3:
-            claim_trust = min(claim_trust, 0.1)
+    num_unsupported = num_claims - num_supported - num_unverifiable - num_contradicted
+    
+    unsupported_penalty = (num_unsupported / num_claims) * 0.5
+    unverifiable_penalty = (num_unverifiable / num_claims) * 0.25
 
-        if support < 0.3:
-            claim_trust = min(claim_trust, 0.15)
+    score = score - unsupported_penalty - unverifiable_penalty
 
-        per_claim_trusts.append(claim_trust)
-
-    if not per_claim_trusts:
-        return 1.0
-
-    overall = 1.0
-    for t in per_claim_trusts:
-        overall *= t
-    n = len(per_claim_trusts)
-    overall = overall ** (1.0 / n) if n > 1 else overall
-
-    return round(max(0.0, min(1.0, overall)), 3)
+    return round(max(0.0, score), 3)

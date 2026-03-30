@@ -39,19 +39,26 @@ def best_sentence_match(claim_text: str, paragraph: str):
 from ddgs import DDGS
 from app.services.source_trust_service import compute_source_trust, get_trust_level_label, extract_domain
 from concurrent.futures import ThreadPoolExecutor
+import logging
+
+logger = logging.getLogger("verifier")
 
 def retrieve_evidence(claim_text: str, top_k: int = 3):
     """
-    Retrieves evidence from multiple sources in parallel to minimize network latency.
+    Implements a tiered evidence retrieval strategy for performance and reliability.
+    Tier 1: Wikipedia (fast, high-trust)
+    Tier 2: DuckDuckGo Search (fallback)
     """
-    all_evidence = []
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        wiki_future = executor.submit(retrieve_wikipedia_evidence, claim_text, top_k)
-        ddgs_future = executor.submit(retrieve_ddgs_evidence, claim_text, top_k)
-        
-        all_evidence.extend(wiki_future.result())
-        all_evidence.extend(ddgs_future.result())
+    logger.info(f"Tier 1 Retrieval: Querying Wikipedia for '{claim_text}'")
+    wiki_evidence = retrieve_wikipedia_evidence(claim_text, top_k=2)
+    if wiki_evidence and any(ev.similarity > 0.8 for ev in wiki_evidence):
+        logger.info("Tier 1 successful, strong evidence found. Skipping web search.")
+        return wiki_evidence
     
+    logger.info(f"Tier 2 Retrieval: Querying DDGS for '{claim_text}'")
+    ddgs_evidence = retrieve_ddgs_evidence(claim_text, top_k=2)
+    
+    all_evidence = wiki_evidence + ddgs_evidence
     all_evidence.sort(
         key=lambda x: (x.similarity or 0) * 0.7 + (x.source_trust or 0) * 0.3,
         reverse=True

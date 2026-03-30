@@ -25,6 +25,7 @@ class VerificationStatus(str, Enum):
 class Claim(BaseModel):
     id: Optional[int] = None
     text: str
+    original_index: Optional[int] = None
     claim_type: Optional[ClaimType] = None
     verifiability_score: Optional[float] = None
     start_char: Optional[int] = None
@@ -42,3 +43,6 @@ class Claim(BaseModel):
     confidence_explanation: list[str] | None = None
     resolved_text: Optional[str] = None
     score_breakdown: Optional[Dict[str, Any]] = None
+
+    class Config:
+        from_attributes = True

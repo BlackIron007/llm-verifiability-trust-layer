@@ -17,7 +17,7 @@ PRONOUN_PATTERNS = re.compile(
 )
 
 CAPITALIZED_ENTITY = re.compile(
-    r'\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b'
+    r'\b([A-Z]\w*(?:\s+(?:[A-Z]\w*|\d+))*)\b'
 )
 
 
@@ -80,8 +80,8 @@ def resolve_coreferences(claims: list) -> list:
     
     Each claim gets a `resolved_text` field if resolution was applied.
     """
-    last_entities: list[str] = []
-    last_person_entity: str | None = None
+    last_person_context: set[str] = set()
+    last_thing_context: set[str] = set()
     
     PLACES_LOWER = {
         "australia", "india", "france", "europe", "asia", "america", 
@@ -90,47 +90,68 @@ def resolve_coreferences(claims: list) -> list:
         "rome", "moscow", "tokyo", "washington"
     }
 
+    TITLES_LOWER = {"emperor", "king", "queen", "president", "pope", "general", "chancellor", "minister"}
+
+    DEMONYMS_LOWER = {"french", "american", "german", "british", "chinese", "japanese", "russian", "indian", "italian", "european"}
+
+    NON_PERSON_KEYWORDS = {"revolution", "war", "empire", "republic"}
+
     def _is_person(ent: str) -> bool:
         """Heuristic: If it's a known place, not a person. If First Last, person."""
-        if ent.lower() in PLACES_LOWER:
+        ent_lower = ent.lower()
+        if ent_lower in PLACES_LOWER:
             return False
+        
+        if ent_lower in DEMONYMS_LOWER:
+            return False
+        
+        if any(kw in ent_lower for kw in NON_PERSON_KEYWORDS):
+            return False
+
+        if ent_lower in TITLES_LOWER:
+            return False
+
         words = ent.split()
         if len(words) >= 2 and all(w.istitle() for w in words):
+            return True
+        if len(words) == 1 and ent.istitle():
             return True
         return False
     
     for claim in claims:
         original_text = claim.text
         
+        pronouns_found = PRONOUN_PATTERNS.findall(original_text)
         current_entities = _extract_named_entities(original_text)
         
-        if current_entities:
-            last_entities = current_entities
-            
-            for ent in current_entities:
-                if _is_person(ent):
-                    last_person_entity = ent
-            
-        pronouns_found = PRONOUN_PATTERNS.findall(original_text)
-        
-        if not pronouns_found:
-            continue
-        
-        valid_thing_entities = [e for e in last_entities if e.lower() not in PLACES_LOWER]
-        target_thing_entity = valid_thing_entities[-1] if valid_thing_entities else None
-        
-        resolved = original_text
-        
-        for pronoun in pronouns_found:
-            if _is_person_pronoun(pronoun):
-                if last_person_entity:
-                    resolved = _replace_pronoun_safe(resolved, last_person_entity, pronoun)
-            elif _is_thing_pronoun(pronoun):
-                if target_thing_entity:
-                    resolved = _replace_pronoun_safe(resolved, target_thing_entity, pronoun)
-        
-        if resolved != original_text:
-            claim.resolved_text = resolved
-            logger.info(f"Coreference resolved: \"{original_text}\" → \"{resolved}\"")
+        current_persons = {ent for ent in current_entities if _is_person(ent)}
+        current_things = {ent for ent in current_entities if not _is_person(ent)}
+
+        if pronouns_found:
+            resolved = original_text
+            for pronoun in pronouns_found:
+                if _is_person_pronoun(pronoun):
+                    person_candidates = current_persons.union(last_person_context)
+                    if len(person_candidates) == 1:
+                        target_person = list(person_candidates)[0]
+                        resolved = _replace_pronoun_safe(resolved, target_person, pronoun)
+                    else:
+                        logger.info(f"Ambiguous person coreference for '{original_text}', candidates: {person_candidates}")
+                elif _is_thing_pronoun(pronoun):
+                    thing_candidates = current_things.union(last_thing_context)
+                    if len(thing_candidates) == 1:
+                        target_thing = list(thing_candidates)[0]
+                        resolved = _replace_pronoun_safe(resolved, target_thing, pronoun)
+                    else:
+                        logger.info(f"Ambiguous thing coreference for '{original_text}', candidates: {thing_candidates}")
+
+            if resolved != original_text:
+                claim.resolved_text = resolved
+                logger.info(f"Coreference resolved: \"{original_text}\" → \"{resolved}\"")
+
+        if current_persons:
+            last_person_context = current_persons
+        if current_things:
+            last_thing_context = current_things
     
     return claims
