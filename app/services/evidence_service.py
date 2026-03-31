@@ -4,6 +4,7 @@ import nltk
 from nltk.tokenize import sent_tokenize
 import httpx
 from urllib.parse import quote
+from app.services.global_cache import embedding_cache
 
 def best_sentence_match(claim_text: str, paragraph: str):
     """
@@ -20,7 +21,10 @@ def best_sentence_match(claim_text: str, paragraph: str):
 
     for i, sentence in enumerate(sentences):
         try:
-            score = compute_similarity(claim_text, sentence)
+            cache_key = hash(frozenset({claim_text, sentence}))
+            if cache_key not in embedding_cache:
+                embedding_cache[cache_key] = compute_similarity(claim_text, sentence)
+            score = embedding_cache[cache_key]
         except Exception:
             score = 0.0
         if score > best_score:

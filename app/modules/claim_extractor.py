@@ -4,6 +4,10 @@ from typing import List
 from app.schemas.claim import Claim
 from app.services.model_client import ModelClient
 from nltk.tokenize import sent_tokenize
+from app.services.global_cache import llm_cache
+import logging
+
+logger = logging.getLogger("verifier")
 
 META_PHRASES = (
     "Here is the atomic statement",
@@ -113,7 +117,12 @@ Text:
 """{text}"""
 '''
 
-    raw_response = ModelClient.generate(prompt)
+    cache_key = hash(prompt)
+    if cache_key in llm_cache:
+        raw_response = llm_cache[cache_key]
+    else:
+        raw_response = ModelClient.generate(prompt)
+        llm_cache[cache_key] = raw_response
 
     json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
     if not json_match:
@@ -152,8 +161,7 @@ COMPLEX_CONJUNCTIONS = re.compile(r'\b(and|but|while|whereas|although|because|si
 
 def extract_claims(text: str) -> List[Claim]:
     """
-    Hybrid claim extraction: uses sentence tokenization for simple claims and
-    an LLM for complex sentences that may contain multiple claims, reducing latency.
+    Extracts claims from text, using an LLM for complex sentences.
     """
     try:
         sentences = sent_tokenize(text)
@@ -173,12 +181,14 @@ def extract_claims(text: str) -> List[Claim]:
         else:
             simple_claims_text.append(sentence)
 
-    llm_claims = []
-    if complex_sentences:
-        complex_text = " ".join(complex_sentences)
-        llm_claims = _extract_claims_with_llm(complex_text)
+    all_claims_text = list(simple_claims_text)
 
-    initial_claims = [Claim(text=t) for t in simple_claims_text] + llm_claims
+    if complex_sentences:
+        for sentence in complex_sentences:
+            llm_claims_for_sentence = _extract_claims_with_llm(sentence)
+            all_claims_text.extend([c.text for c in llm_claims_for_sentence])
+
+    initial_claims = [Claim(text=t) for t in all_claims_text if t]
 
     claims = repair_split_claims(initial_claims)
     claims = filter_claims(claims)

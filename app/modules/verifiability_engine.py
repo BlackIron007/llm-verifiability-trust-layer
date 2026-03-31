@@ -44,7 +44,14 @@ def rephrase_claim(claim_text: str) -> str:
     \"\"\"{claim_text}\"\"\"
     """
 
-    return ModelClient.generate(prompt).strip()
+    from app.services.global_cache import llm_cache
+    cache_key = hash(prompt)
+    if cache_key in llm_cache:
+        return llm_cache[cache_key]
+    
+    response = ModelClient.generate(prompt).strip()
+    llm_cache[cache_key] = response
+    return response
 
 def refine_verifiability(claim: Claim) -> Claim:
     """

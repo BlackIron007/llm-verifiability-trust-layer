@@ -46,7 +46,7 @@ from app.api_key import verify_api_key
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
-from app.services.evidence_cache import get_cached_evidence, set_cached_evidence
+from app.services.global_cache import evidence_cache, nli_cache
 from app.modules.query_rewriter import rewrite_query
 from app.modules.intra_answer_checker import check_world_knowledge_contradictions
 from app.modules.coreference_resolver import resolve_coreferences
@@ -170,15 +170,15 @@ def _fetch_evidence(search_query: str) -> list:
     A helper function designed to be run in a thread pool.
     It retrieves evidence for a single search query, utilizing the global cache.
     """
-    cached = get_cached_evidence(search_query)
-    if cached is not None:
+    cache_key = hash(search_query)
+    if cache_key in evidence_cache:
         logger.info(f"Global cache hit for query: '{search_query}'")
-        return cached
+        return evidence_cache[cache_key]
     
     logger.info(f"Cache miss for query: '{search_query}'")
     evidence = retrieve_evidence(search_query)
     evidence = summarize_evidence(evidence)
-    set_cached_evidence(search_query, evidence)
+    evidence_cache[cache_key] = evidence
     return evidence
 
 def _finalize_claim_processing(claim, question):
@@ -219,13 +219,13 @@ def _finalize_claim_processing(claim, question):
     elif claim.support_strength >= 0.5:
         claim.verification_status = VerificationStatus.SUPPORTED
     else:
-        is_hard_fact = claim.claim_type == ClaimType.HARD_FACT
+        is_factual_claim = claim.claim_type in [ClaimType.HARD_FACT, ClaimType.SOFT_FACT]
         effective_text = claim.resolved_text or claim.text
         entities = _extract_named_entities(effective_text)
         is_entity_year_pattern = len(entities) > 0 and re.search(r'\b\d{4}\b', effective_text)
         is_general_entity_fact = len(entities) > 0 and len(effective_text.split()) < 15
 
-        if is_hard_fact and (is_entity_year_pattern or is_general_entity_fact):
+        if is_factual_claim and (is_entity_year_pattern or is_general_entity_fact):
             logger.info(f"Evidence fallback (weak evidence override): Marking '{claim.text}' as SUPPORTED due to high-confidence pattern.")
             claim.verification_status = VerificationStatus.SUPPORTED
             claim.support_strength = max(claim.support_strength or 0.0, 0.8)
@@ -381,7 +381,6 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         for claim in claims_group:
             claim.evidence = final_evidence
 
-    nli_cache = {} 
     nli_batch_pairs = []
     nli_batch_targets = []
 
@@ -398,7 +397,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
                 ev.support_score = 0.95
                 continue
 
-            cache_key = (eff_text, ev.evidence)
+            cache_key = hash((eff_text, ev.evidence))
             if cache_key in nli_cache:
                 ev.support_label, ev.support_score = nli_cache[cache_key]
                 continue
@@ -412,7 +411,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             ev = nli_batch_targets[i]
             ev.support_label = label
             ev.support_score = score
-            cache_key = (nli_batch_pairs[i][0], nli_batch_pairs[i][1])
+            cache_key = hash((nli_batch_pairs[i][0], nli_batch_pairs[i][1]))
             nli_cache[cache_key] = (label, score)
 
     for claim in claims_to_process_fully:
@@ -619,6 +618,7 @@ def explain_claim_on_demand(
     request: Request
 ):
     """
+    DEPRECATED. This logic is now part of the core pipeline.
     On-Demand Explanation Layer.
     Generates an explanation for a claim's trust score asynchronously to save latency on the main verification path.
     """
@@ -626,6 +626,7 @@ def explain_claim_on_demand(
     logger.info(f"Explain claim request from IP: {client_ip}")
     
     from app.services.model_client import ModelClient
+    from app.services.global_cache import llm_cache
     prompt = f"""Analyze the factual verifiability of the following claim.
     Keep the explanation concise and objective.
     If the claim is likely false, unverified, or hallucinated, classify the error into a specific category (e.g., ENTITY ERROR, FACTUAL CONTRADICTION, Number Exaggeration, Anachronism, Unsupported, Logical Fallacy). You must explicitly output 'ENTITY ERROR' if there is an entity mismatch, and 'FACTUAL CONTRADICTION' if there is a factual contradiction. If the claim is well-supported and true, set the category to null.
@@ -638,7 +639,12 @@ def explain_claim_on_demand(
 
     Claim: '{payload.claim_text}'"""
     
-    raw_response = ModelClient.generate(prompt).strip()
+    cache_key = hash(prompt)
+    if cache_key in llm_cache:
+        raw_response = llm_cache[cache_key]
+    else:
+        raw_response = ModelClient.generate(prompt).strip()
+        llm_cache[cache_key] = raw_response
     
     try:
         json_str = re.sub(r'^```json\s*', '', raw_response)

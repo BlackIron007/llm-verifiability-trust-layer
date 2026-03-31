@@ -2,7 +2,7 @@ from app.schemas.claim import Claim, ClaimType
 from app.services.model_client import ModelClient
 import json
 import re
-from app.services.claim_cache import get_cached_classification, set_cached_classification
+from app.services.global_cache import claim_classification_cache, llm_cache
 import logging
 
 from transformers import pipeline
@@ -52,7 +52,12 @@ def _classify_claim_with_llm(claim: Claim) -> Claim:
     \"\"\"{claim.text}\"\"\"
     """
 
-    raw_response = ModelClient.generate(prompt)
+    cache_key = hash(prompt)
+    if cache_key in llm_cache:
+        raw_response = llm_cache[cache_key]
+    else:
+        raw_response = ModelClient.generate(prompt)
+        llm_cache[cache_key] = raw_response
 
     json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
 
@@ -77,10 +82,10 @@ def classify_claim(claim: Claim) -> Claim:
     Utilizes a cache to avoid re-classifying known claims.
     """
 
-    cached_type = get_cached_classification(claim.text)
-    if cached_type is not None:
+    cache_key = hash(claim.text)
+    if cache_key in claim_classification_cache:
         logger.info(f"Claim classification cache hit for: '{claim.text}'")
-        claim.claim_type = cached_type
+        claim.claim_type = claim_classification_cache[cache_key]
         return claim
     
     logger.info(f"Claim classification cache miss for: '{claim.text}'")
@@ -88,7 +93,7 @@ def classify_claim(claim: Claim) -> Claim:
     from app.modules.coreference_resolver import _extract_named_entities
     if _extract_named_entities(claim.text) and len(claim.text.split()) >= 3:
         claim.claim_type = ClaimType.HARD_FACT
-        set_cached_classification(claim.text, claim.claim_type)
+        claim_classification_cache[cache_key] = claim.claim_type
         return claim
 
     if CLASSIFIER_PIPELINE:
@@ -98,6 +103,6 @@ def classify_claim(claim: Claim) -> Claim:
     else:
         claim = _classify_claim_with_llm(claim)
 
-    set_cached_classification(claim.text, claim.claim_type)
+    claim_classification_cache[cache_key] = claim.claim_type
 
     return claim

@@ -1,5 +1,6 @@
 from app.services.embedding_service import compute_similarity
 from app.modules.coreference_resolver import _extract_named_entities
+from app.services.global_cache import embedding_cache
 import re
 
 def check_question_claim_consistency(question: str, claim_text: str):
@@ -8,7 +9,10 @@ def check_question_claim_consistency(question: str, claim_text: str):
     """
 
     try:
-        similarity = compute_similarity(question, claim_text)
+        cache_key = hash(frozenset({question, claim_text}))
+        if cache_key not in embedding_cache:
+            embedding_cache[cache_key] = compute_similarity(question, claim_text)
+        similarity = embedding_cache[cache_key]
     except Exception:
         similarity = 0.0
 
