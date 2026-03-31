@@ -48,27 +48,32 @@ import logging
 
 logger = logging.getLogger("verifier")
 
-def retrieve_evidence(claim_text: str, top_k: int = 3):
+def retrieve_evidence(claim_text: str, top_k: int = 3, mode: str = "full"):
     """
     Implements a tiered evidence retrieval strategy for performance and reliability.
     Tier 1: Wikipedia (fast, high-trust)
-    Tier 2: DuckDuckGo Search (fallback)
+    Tier 2: DuckDuckGo Search (fallback, skipped in 'fast' mode)
     """
     logger.info(f"Tier 1 Retrieval: Querying Wikipedia for '{claim_text}'")
     wiki_evidence = retrieve_wikipedia_evidence(claim_text, top_k=2)
+
+    if mode == "fast":
+        logger.info("Fast mode: Skipping web search.")
+        return wiki_evidence
+
     if wiki_evidence and any(ev.similarity > 0.8 for ev in wiki_evidence):
         logger.info("Tier 1 successful, strong evidence found. Skipping web search.")
         return wiki_evidence
-    
+
     logger.info(f"Tier 2 Retrieval: Querying DDGS for '{claim_text}'")
     ddgs_evidence = retrieve_ddgs_evidence(claim_text, top_k=2)
-    
+
     all_evidence = wiki_evidence + ddgs_evidence
     all_evidence.sort(
         key=lambda x: (x.similarity or 0) * 0.7 + (x.source_trust or 0) * 0.3,
         reverse=True
     )
-    
+
     return all_evidence
 
 

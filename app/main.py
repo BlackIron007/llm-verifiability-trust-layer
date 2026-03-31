@@ -165,7 +165,7 @@ QUALIFIER_PHRASES = {
 }
 
 
-def _fetch_evidence(search_query: str) -> list:
+def _fetch_evidence(search_query: str, mode: str = "full") -> list:
     """
     A helper function designed to be run in a thread pool.
     It retrieves evidence for a single search query, utilizing the global cache.
@@ -176,7 +176,7 @@ def _fetch_evidence(search_query: str) -> list:
         return evidence_cache[cache_key]
     
     logger.info(f"Cache miss for query: '{search_query}'")
-    evidence = retrieve_evidence(search_query)
+    evidence = retrieve_evidence(search_query, mode=mode)
     evidence = summarize_evidence(evidence)
     evidence_cache[cache_key] = evidence
     return evidence
@@ -258,7 +258,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     if len(answer.split()) > 10:
         speculative_query = rewrite_query(answer)
         bg_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='speculative_fetch')
-        bg_executor.submit(_fetch_evidence, speculative_query)
+        bg_executor.submit(_fetch_evidence, speculative_query, mode=mode)
         bg_executor.shutdown(wait=False)
         logger.info(f"Speculatively fetching evidence for query: '{speculative_query}'")
 
@@ -323,7 +323,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         is_very_simple_fact = len(claim.text.split()) < 8
 
         if is_low_risk_hard_fact and is_very_simple_fact:
-            claim.confidence_explanation = ["Simple, low-risk factual claim. Fast verification mode applied."]
+            claim.confidence_explanation = ["Simple, low-risk factual claim. Fast-tracked verification."]
             claim.support_strength = 1.0
             claim.contradiction_strength = 0.0
             claim.verification_status = VerificationStatus.SUPPORTED
@@ -336,8 +336,9 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             claim.contradiction_strength = 0.0
             claim.verification_status = VerificationStatus.SUPPORTED
             processed_claims_early.append(claim)
-        else:
-            claims_to_process_fully.append(claim)
+            continue
+        
+        claims_to_process_fully.append(claim)
 
     relevance_score = 0.9 if len(answer.split()) < 40 else compute_qa_relevance(question, answer)
 
@@ -363,7 +364,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     evidence_map = {}
     if all_unique_queries:
         with ThreadPoolExecutor(max_workers=min(8, len(all_unique_queries))) as executor:
-            future_to_query = {executor.submit(_fetch_evidence, query): query for query in all_unique_queries}
+            future_to_query = {executor.submit(_fetch_evidence, query, mode=mode): query for query in all_unique_queries}
 
             for future in as_completed(future_to_query):
                 query = future_to_query[future]
@@ -400,6 +401,13 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         evidence_to_process = claim.evidence[:1]
 
         for ev in evidence_to_process:
+            # Fast mode: skip NLI for high-similarity evidence
+            if mode == "fast" and (ev.similarity or 0) > 0.8:
+                logger.info(f"Fast mode: Skipping NLI for high-similarity evidence (sim: {ev.similarity}).")
+                ev.support_label = "supports"
+                ev.support_score = 0.90
+                continue
+
             if (ev.similarity or 0) > 0.7 and (ev.source_trust or 0) >= 0.9:
                 ev.support_label = "supports"
                 ev.support_score = 0.95
