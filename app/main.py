@@ -254,6 +254,14 @@ def _finalize_claim_processing(claim, question):
 
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
+    
+    if len(answer.split()) > 10:
+        speculative_query = rewrite_query(answer)
+        bg_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='speculative_fetch')
+        bg_executor.submit(_fetch_evidence, speculative_query)
+        bg_executor.shutdown(wait=False)
+        logger.info(f"Speculatively fetching evidence for query: '{speculative_query}'")
+
     claims = extract_claims(answer)
     for i, claim in enumerate(claims):
         claim.original_index = i
