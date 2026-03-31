@@ -309,6 +309,8 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
 
+    detect_internal_contradictions(refined_claims, mode="rules_only")
+
     claims_to_process_fully = []
     processed_claims_early = []
 
@@ -316,6 +318,10 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         if claim.verification_status is not None:
             if not getattr(claim, 'confidence_explanation', None) and getattr(claim, 'explanation', None):
                 claim.confidence_explanation = [claim.explanation]
+            processed_claims_early.append(claim)
+            continue
+        
+        if claim.verification_status == VerificationStatus.CONTRADICTED:
             processed_claims_early.append(claim)
             continue
 
@@ -401,7 +407,6 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
         evidence_to_process = claim.evidence[:1]
 
         for ev in evidence_to_process:
-            # Fast mode: skip NLI for high-similarity evidence
             if mode == "fast" and (ev.similarity or 0) > 0.8:
                 logger.info(f"Fast mode: Skipping NLI for high-similarity evidence (sim: {ev.similarity}).")
                 ev.support_label = "supports"

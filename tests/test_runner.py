@@ -162,8 +162,7 @@ def run_tests():
         start_time = time.time()
         
         try:
-            #resp = requests.post(API_URL, json={"question": test["question"], "answer": test["answer"], "mode": "full"}, headers=headers)
-            resp = requests.post(API_URL, json={"question": test["question"], "answer": test["answer"], "mode": "fast"}, headers=headers)
+            resp = requests.post(API_URL, json={"question": test["question"], "answer": test["answer"], "mode": "full"}, headers=headers)
             latency = time.time() - start_time
                 
             data = resp.json()

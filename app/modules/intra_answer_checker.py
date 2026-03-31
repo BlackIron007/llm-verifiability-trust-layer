@@ -69,7 +69,7 @@ def _normalize_for_numeric_check(text: str) -> str:
     text_no_qualifiers = QUALIFIER_REGEX.sub('', text_no_nums)
     return re.sub(r'\s+', ' ', text_no_qualifiers).strip()
 
-def detect_internal_contradictions(claims):
+def detect_internal_contradictions(claims, mode="full"):
     """
     Detect contradictions between claims within the same answer.
     Uses both rule-based checks and NLI for broader coverage.
@@ -138,6 +138,9 @@ def detect_internal_contradictions(claims):
                         contradicted_indices.add(i)
                         contradicted_indices.add(j)
                         continue
+
+    if mode == "rules_only":
+        return contradictions
 
     SIMILARITY_THRESHOLD = 0.85
     CONTRADICTION_CONFIDENCE = 0.7
