@@ -5,9 +5,8 @@ STOP_WORDS = {
     "a", "an", "the", "in", "on", "at", "for", "to", "of", "by", "with", "is", "are", "was", "were", "be", "been", "being",
     "he", "she", "it", "they", "i", "you", "we", "his", "her", "its", "their", "my", "your", "our",
     "has", "have", "had", "do", "does", "did", "will", "would", "shall", "should", "can", "could", "may", "might", "must",
-    "and", "but", "or", "so", "if", "when", "while", "that", "which", "who", "what", "where", "why", "how",
-    "this", "these", "those", "from", "about", "as", "into", "like", "through", "after", "before", "during",
-    "rose", "to", "prominence", "became", "developed", "gained", "from", "very"
+    "and", "but", "or", "so", "if", "when", "while", "that", "which", "who", "what", "where", "why", "how", "this", 
+    "these", "those", "from", "about", "as", "into", "like", "through", "after", "before", "during", "from", "very"
 }
 
 def rewrite_query(claim_text: str) -> str:

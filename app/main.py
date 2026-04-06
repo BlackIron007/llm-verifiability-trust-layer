@@ -572,9 +572,10 @@ def recent_verifications(request: Request):
     """Return the most recent verification results from SQLite."""
     return get_recent_verifications(limit=10)
 
-async def stream_verification(question: str, answer: str):
+async def stream_verification(question: str, answer: str, mode: str = "full"):
     """
-    Splits an answer into sentences, verifies each sentence, and streams the results.
+    Splits an answer into sentences, verifies each sentence, and streams the results,
+    applying the specified mode.
     """
     loop = asyncio.get_running_loop()
     sentences = sent_tokenize(answer)
@@ -582,10 +583,10 @@ async def stream_verification(question: str, answer: str):
     if sentences:
         with ThreadPoolExecutor(max_workers=min(4, len(sentences))) as executor:
             tasks = [
-                loop.run_in_executor(executor, _core_verify, question, s.strip())
+                loop.run_in_executor(executor, _core_verify, question, s.strip(), mode)
                 for s in sentences if s.strip()
             ]
-            for future in asyncio.as_completed(tasks):
+            for future in as_completed(tasks):
                 result = await future
                 yield f"data: {json.dumps(result.dict())}\n\n"
 
@@ -595,13 +596,10 @@ async def verify_stream(
     payload: LLMVerificationRequest,
     request: Request
 ):
-    """
-    Accepts a question and an answer, and streams the verification results
-    for each sentence in the answer.
-    """
+    """Accepts a question and an answer, and streams the verification results for each sentence in the answer."""
     client_ip = request.client.host if request.client else "unknown"
     logger.info(f"Verify stream request from IP: {client_ip}")
-    generator = stream_verification(payload.question, payload.answer)
+    generator = stream_verification(payload.question, payload.answer, payload.mode)
     return StreamingResponse(
         generator,
         media_type="text/event-stream"

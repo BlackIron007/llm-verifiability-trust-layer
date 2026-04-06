@@ -93,18 +93,18 @@ def detect_internal_contradictions(claims, mode="full"):
 
             numbers_a = _extract_and_normalize_numbers(claim_a)
             numbers_b = _extract_and_normalize_numbers(claim_b)
-            
             if numbers_a and numbers_b and set(numbers_a) != set(numbers_b):
-                subjects_are_similar = False
-                if subj_a and subj_b:
-                    cache_key = hash(frozenset({subj_a, subj_b}))
-                    if cache_key not in embedding_cache:
-                        embedding_cache[cache_key] = compute_similarity(subj_a, subj_b)
-                    if embedding_cache[cache_key] > 0.9:
-                        subjects_are_similar = True
+                is_pronoun_ref = (subj_a and subj_b and subj_b.lower() in {"it", "he", "she", "they"} and j == i + 1)
 
-                if subjects_are_similar or (subj_a and subj_b and subj_b.lower() in {"it", "he", "she", "they"} and j == i + 1):
-                    logger.info(f"Numeric contradiction found by subject grouping: '{claim_a}' vs '{claim_b}'")
+                base_a = _normalize_for_numeric_check(claim_a)
+                base_b = _normalize_for_numeric_check(claim_b)
+                cache_key = hash(frozenset({base_a, base_b}))
+                if cache_key not in embedding_cache:
+                    embedding_cache[cache_key] = compute_similarity(base_a, base_b)
+                has_high_base_sim = embedding_cache[cache_key] > 0.95
+
+                if is_pronoun_ref or has_high_base_sim:
+                    logger.info(f"Numeric contradiction found: '{claim_a}' vs '{claim_b}'")
                     contradictions.append({
                         "claim_a": claim_a, "claim_b": claim_b, "confidence": 1.0, "type": "numeric_heuristic"
                     })
@@ -157,6 +157,11 @@ def detect_internal_contradictions(claims, mode="full"):
             claim_b_obj = claims[j]
             claim_a = claim_a_obj.resolved_text or claim_a_obj.text
             claim_b = claim_b_obj.resolved_text or claim_b_obj.text
+
+            numbers_a = _extract_and_normalize_numbers(claim_a)
+            numbers_b = _extract_and_normalize_numbers(claim_b)
+            if numbers_a and numbers_b and set(numbers_a) != set(numbers_b):
+                continue
 
             try:
                 cache_key = hash(frozenset({claim_a, claim_b}))
