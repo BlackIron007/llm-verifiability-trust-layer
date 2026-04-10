@@ -8,6 +8,7 @@ Ambiguous cases are left untouched.
 
 import re
 import logging
+import gender_guesser.detector as gender
 
 logger = logging.getLogger("verifier")
 
@@ -67,6 +68,35 @@ def _replace_pronoun_safe(text: str, entity: str, pronoun: str) -> str:
     pattern = re.compile(r'\b' + re.escape(pronoun) + r'\b', re.IGNORECASE)
     return pattern.sub(entity, text, count=1)
 
+GENDER_DETECTOR = gender.Detector()
+
+MALE_ROLE_KEYWORDS = {"husband", "brother", "father", "son", "king", "emperor", "pope", "mr"}
+FEMALE_ROLE_KEYWORDS = {"woman", "wife", "sister", "mother", "daughter", "queen", "mrs", "ms", "miss"}
+
+def _get_entity_gender(entity_text: str) -> str:
+    """
+    Determines the likely gender of a named entity.
+    1. Checks for explicit role keywords (e.g., 'husband', 'queen').
+    2. If none, uses a lightweight library to guess gender from the first name.
+    Returns 'male', 'female', or 'unknown'.
+    """
+    lower_text = entity_text.lower()
+    words = set(lower_text.split())
+
+    if words.intersection(MALE_ROLE_KEYWORDS):
+        return "male"
+    if words.intersection(FEMALE_ROLE_KEYWORDS):
+        return "female"
+
+    first_name = entity_text.split()[0]
+    predicted_gender = GENDER_DETECTOR.get_gender(first_name.capitalize())
+
+    if predicted_gender in {"male", "mostly_male"}:
+        return "male"
+    if predicted_gender in {"female", "mostly_female"}:
+        return "female"
+
+    return "unknown"
 
 def resolve_coreferences(claims: list) -> list:
     """
@@ -97,24 +127,6 @@ def resolve_coreferences(claims: list) -> list:
     NON_PERSON_KEYWORDS = {"revolution", "war", "empire", "republic"}
     NON_PERSON_NOUNS = {"nobel prize", "world war i", "world war ii", "french revolution", "university of paris", "aplastic anemia"}
     NON_PERSON_CAPITALIZED = {"university", "theory", "achievements", "during", "world", "war", "i", "ii"}
-
-    MALE_KEYWORDS = {"he", "him", "his", "husband", "brother", "father", "son", "king", "emperor", "pope", "mr", "pierre", "napoleon", "einstein", "columbus", "shakespeare"}
-    FEMALE_KEYWORDS = {"she", "her", "hers", "woman", "wife", "sister", "mother", "daughter", "queen", "mrs", "ms", "miss", "marie", "curie"}
-
-    def _get_entity_gender(entity_text: str) -> str:
-        """
-        Determines the likely gender of a named entity based on keywords.
-        Returns 'male', 'female', or 'unknown'.
-        """
-        lower_text = entity_text.lower()
-        words = set(lower_text.split())
-
-        if words.intersection(MALE_KEYWORDS):
-            return "male"
-        if words.intersection(FEMALE_KEYWORDS):
-            return "female"
-        
-        return "unknown"
 
     def _is_person(ent: str) -> bool:
         """Heuristic: If it's a known place, not a person. If First Last, person."""
