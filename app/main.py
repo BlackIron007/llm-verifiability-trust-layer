@@ -12,6 +12,7 @@ logger = logging.getLogger("verifier")
 
 from transformers.utils import logging as hf_logging
 hf_logging.set_verbosity_error()
+import torch
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from fastapi import FastAPI, APIRouter, Request, Depends
@@ -46,6 +47,7 @@ from app.api_key import verify_api_key
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
+import copy
 from app.services.global_cache import evidence_cache, nli_cache
 from app.modules.query_rewriter import rewrite_query
 from app.modules.intra_answer_checker import check_world_knowledge_contradictions
@@ -54,6 +56,8 @@ from app.services.verification_store import init_db, save_verification, get_rece
 from app.modules.coreference_resolver import _extract_named_entities
 from collections import defaultdict
 from pydantic import BaseModel
+from sentence_transformers import SentenceTransformer
+from sentence_transformers.util import community_detection
 import re
 
 class LimitUploadSize(BaseHTTPMiddleware):
@@ -84,10 +88,11 @@ async def lifespan(app: FastAPI):
             "Scientific evidence for climate change",
             "History of the internet"
         ]
-        with ThreadPoolExecutor(max_workers=len(warmup_queries)) as executor:
-            list(executor.map(_fetch_evidence, warmup_queries))
+        for q in warmup_queries:
+            _fetch_evidence(q)
 
     await loop.run_in_executor(None, run_warmup)
+    _get_embedding_model()
     init_db()
     logger.info("Application startup: Models are warm and ready.")
     yield
@@ -222,8 +227,8 @@ def _finalize_claim_processing(claim, question):
         is_factual_claim = claim.claim_type in [ClaimType.HARD_FACT, ClaimType.SOFT_FACT]
         effective_text = claim.resolved_text or claim.text
         entities = _extract_named_entities(effective_text)
-        is_entity_year_pattern = len(entities) > 0 and re.search(r'\b\d{4}\b', effective_text)
-        is_general_entity_fact = len(entities) > 0 and len(effective_text.split()) < 15
+        is_entity_year_pattern = len(entities) > 0 and bool(re.search(r'\b\d{4}\b', effective_text))
+        is_general_entity_fact = len(entities) > 0 and len(effective_text.split()) < 25
 
         if is_factual_claim and (is_entity_year_pattern or is_general_entity_fact):
             logger.info(f"Evidence fallback (weak evidence override): Marking '{claim.text}' as SUPPORTED due to high-confidence pattern.")
@@ -252,15 +257,27 @@ def _finalize_claim_processing(claim, question):
 
     return claim
 
+_embedding_model = None
+
+def _get_embedding_model():
+    """Initializes and returns a singleton instance of a sentence embedding model for clustering."""
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info("Loading sentence embedding model for clustering...")
+        _embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Sentence embedding model loaded.")
+    return _embedding_model
+
+def _get_claim_clusters(claims: list[Claim], min_community_size=2, threshold=0.7) -> dict[str, list[Claim]]:
+    """
+    Clusters claims to generate a smaller number of more comprehensive search queries.
+    Returns a dictionary mapping a representative query to the claims in that cluster.
+    """
+    return {rewrite_query(c.resolved_text or c.text): [c] for c in claims}
+
 def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResponse:
     """Internal service function containing the core verification logic."""
-    
-    if len(answer.split()) > 10:
-        speculative_query = rewrite_query(answer)
-        bg_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='speculative_fetch')
-        bg_executor.submit(_fetch_evidence, speculative_query, mode=mode)
-        bg_executor.shutdown(wait=False)
-        logger.info(f"Speculatively fetching evidence for query: '{speculative_query}'")
+
 
     claims = extract_claims(answer)
     for i, claim in enumerate(claims):
@@ -309,8 +326,6 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
     scored_claims = [assign_baseline_risk(c) for c in classified_claims]
     refined_claims = [refine_verifiability(c) for c in scored_claims]
 
-    detect_internal_contradictions(refined_claims, mode="rules_only")
-
     claims_to_process_fully = []
     processed_claims_early = []
 
@@ -348,25 +363,11 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
 
     relevance_score = 0.9 if len(answer.split()) < 40 else compute_qa_relevance(question, answer)
 
-    query_to_claims_map = defaultdict(list)
-    query_to_risk = {}
-    for claim in claims_to_process_fully:
-        if claim.claim_type != ClaimType.OPINION:
-            eff_text = claim.resolved_text or claim.text
-            rewritten_query = rewrite_query(eff_text)
-            logger.info(f"Rewrote query: '{eff_text}' -> '{rewritten_query}'")
-            query_to_claims_map[rewritten_query].append(claim)
-            current_risk = query_to_risk.get(rewritten_query, 0.0)
-            query_to_risk[rewritten_query] = max(current_risk, claim.verifiability_score or 0.5)
-
+    factual_claims = [c for c in claims_to_process_fully if c.claim_type != ClaimType.OPINION]
+    query_to_claims_map = _get_claim_clusters(factual_claims)
     all_unique_queries = list(query_to_claims_map.keys())
-
-    EXTERNAL_API_CALL_LIMIT = 2
-    if len(all_unique_queries) > EXTERNAL_API_CALL_LIMIT:
-        logger.info(f"Limiting {len(all_unique_queries)} potential API calls to {EXTERNAL_API_CALL_LIMIT} based on claim risk.")
-        all_unique_queries.sort(key=lambda query: query_to_risk.get(query, 0.0), reverse=True)
-        all_unique_queries = all_unique_queries[:EXTERNAL_API_CALL_LIMIT]
-
+    logger.info(f"Generated {len(all_unique_queries)} unique queries from {len(factual_claims)} claims via clustering.")
+    
     evidence_map = {}
     if all_unique_queries:
         with ThreadPoolExecutor(max_workers=min(8, len(all_unique_queries))) as executor:
@@ -388,13 +389,12 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
 
     for query, claims_group in query_to_claims_map.items():
         all_evidence = evidence_map.get(query, [])
-        
-        pruned_evidence = [ev for ev in all_evidence if (ev.similarity or 0) > 0.6]
+        pruned_evidence = [ev for ev in all_evidence if (ev.similarity or 0) > 0.7]
         
         evidence_limit = 1 if mode == "fast" else 2
-        final_evidence = pruned_evidence[:evidence_limit]
+        final_evidence = pruned_evidence[:(1 if mode == "fast" else 3)]
         for claim in claims_group:
-            claim.evidence = final_evidence
+            claim.evidence = copy.deepcopy(final_evidence)
 
     nli_batch_pairs = []
     nli_batch_targets = []
@@ -404,7 +404,7 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
             continue
 
         eff_text = claim.resolved_text or claim.text
-        evidence_to_process = claim.evidence[:1]
+        evidence_to_process = claim.evidence
 
         for ev in evidence_to_process:
             if mode == "fast" and (ev.similarity or 0) > 0.8:
@@ -462,8 +462,12 @@ def _core_verify(question: str, answer: str, mode: str = "full") -> AnalysisResp
                     "contradictions": claim.contradiction_strength or 0.0,
                     "qa_alignment": claim.qa_similarity or 0.0
                 }
+        
+    if mode == "full":
+        internal_contradictions = detect_internal_contradictions(final_claims, mode="full")
+    else:
+        internal_contradictions = detect_internal_contradictions(final_claims, mode="rules_only")
 
-    internal_contradictions = detect_internal_contradictions(final_claims)
     final_claims = check_world_knowledge_contradictions(final_claims)
 
     has_any_contradiction = any(c.verification_status == VerificationStatus.CONTRADICTED for c in final_claims)

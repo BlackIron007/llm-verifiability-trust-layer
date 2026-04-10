@@ -92,9 +92,29 @@ def resolve_coreferences(claims: list) -> list:
 
     TITLES_LOWER = {"emperor", "king", "queen", "president", "pope", "general", "chancellor", "minister"}
 
-    DEMONYMS_LOWER = {"french", "american", "german", "british", "chinese", "japanese", "russian", "indian", "italian", "european"}
+    DEMONYMS_LOWER = {"french", "american", "german", "british", "chinese", "japanese", "russian", "indian", "italian", "european", "polish", "spanish", "dutch", "swedish", "swiss", "canadian"}
 
     NON_PERSON_KEYWORDS = {"revolution", "war", "empire", "republic"}
+    NON_PERSON_NOUNS = {"nobel prize", "world war i", "world war ii", "french revolution", "university of paris", "aplastic anemia"}
+    NON_PERSON_CAPITALIZED = {"university", "theory", "achievements", "during", "world", "war", "i", "ii"}
+
+    MALE_KEYWORDS = {"he", "him", "his", "husband", "brother", "father", "son", "king", "emperor", "pope", "mr", "pierre", "napoleon", "einstein", "columbus", "shakespeare"}
+    FEMALE_KEYWORDS = {"she", "her", "hers", "woman", "wife", "sister", "mother", "daughter", "queen", "mrs", "ms", "miss", "marie", "curie"}
+
+    def _get_entity_gender(entity_text: str) -> str:
+        """
+        Determines the likely gender of a named entity based on keywords.
+        Returns 'male', 'female', or 'unknown'.
+        """
+        lower_text = entity_text.lower()
+        words = set(lower_text.split())
+
+        if words.intersection(MALE_KEYWORDS):
+            return "male"
+        if words.intersection(FEMALE_KEYWORDS):
+            return "female"
+        
+        return "unknown"
 
     def _is_person(ent: str) -> bool:
         """Heuristic: If it's a known place, not a person. If First Last, person."""
@@ -109,6 +129,14 @@ def resolve_coreferences(claims: list) -> list:
             return False
 
         if ent_lower in TITLES_LOWER:
+            return False
+        
+        if ent_lower in NON_PERSON_NOUNS:
+            return False
+        if ent_lower in NON_PERSON_CAPITALIZED:
+            return False
+
+        if ent_lower in {"her", "his", "its", "their"}:
             return False
 
         words = ent.split()
@@ -132,11 +160,23 @@ def resolve_coreferences(claims: list) -> list:
             for pronoun in pronouns_found:
                 if _is_person_pronoun(pronoun):
                     person_candidates = current_persons.union(last_person_context)
-                    if len(person_candidates) == 1:
-                        target_person = list(person_candidates)[0]
+                    filtered_candidates = set()
+                    pronoun_lower = pronoun.lower()
+                    
+                    if pronoun_lower in {"she", "her", "hers"}:
+                        for p in person_candidates:
+                            if _get_entity_gender(p) != "male":
+                                filtered_candidates.add(p)
+                    elif pronoun_lower in {"he", "him", "his"}:
+                        for p in person_candidates:
+                            if _get_entity_gender(p) != "female":
+                                filtered_candidates.add(p)
+
+                    if len(filtered_candidates) == 1:
+                        target_person = list(filtered_candidates)[0]
                         resolved = _replace_pronoun_safe(resolved, target_person, pronoun)
                     else:
-                        logger.info(f"Ambiguous person coreference for '{original_text}', candidates: {person_candidates}")
+                        logger.info(f"Ambiguous person coreference for '{original_text}', candidates: {filtered_candidates or person_candidates}")
                 elif _is_thing_pronoun(pronoun):
                     thing_candidates = current_things.union(last_thing_context)
                     if len(thing_candidates) == 1:
@@ -150,8 +190,8 @@ def resolve_coreferences(claims: list) -> list:
                 logger.info(f"Coreference resolved: \"{original_text}\" → \"{resolved}\"")
 
         if current_persons:
-            last_person_context = current_persons
+            last_person_context.update(current_persons)
         if current_things:
-            last_thing_context = current_things
+            last_thing_context.update(current_things)
     
     return claims

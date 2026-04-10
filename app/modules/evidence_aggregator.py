@@ -4,7 +4,7 @@ def is_high_confidence_evidence(ev):
 
 def is_high_confidence_contradiction(ev):
     """Checks if evidence is a high-confidence contradiction."""
-    return ev.support_label == "contradicts" and (ev.support_score or 0) > 0.8 and (ev.source_trust or 0) >= 0.75
+    return ev.support_label == "contradicts" and (ev.support_score or 0) > 0.8 and (ev.source_trust or 0) >= 0.75 and (ev.similarity or 0) > 0.7
 
 def aggregate_evidence(evidence_list):
     """
@@ -40,7 +40,7 @@ def aggregate_evidence(evidence_list):
         support_score = ev.support_score or 0.0
         label = ev.support_label or "neutral"
 
-        if (ev.similarity or 0) < 0.5 and label == "supports":
+        if (ev.similarity or 0) < 0.5:
             label = "neutral"
 
         if support_score < CONFIDENCE_THRESHOLD:

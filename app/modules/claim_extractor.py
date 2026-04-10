@@ -121,8 +121,12 @@ Text:
     if cache_key in llm_cache:
         raw_response = llm_cache[cache_key]
     else:
-        raw_response = ModelClient.generate(prompt)
-        llm_cache[cache_key] = raw_response
+        try:
+            raw_response = ModelClient.generate(prompt)
+            llm_cache[cache_key] = raw_response
+        except Exception as e:
+            logger.error(f"LLM call failed during claim extraction: {e}")
+            return []
 
     json_match = re.search(r'\{.*\}', raw_response, re.DOTALL)
     if not json_match:
@@ -161,34 +165,13 @@ COMPLEX_CONJUNCTIONS = re.compile(r'\b(and|but|while|whereas|although|because|si
 
 def extract_claims(text: str) -> List[Claim]:
     """
-    Extracts claims from text, using an LLM for complex sentences.
+    Extracts claims from text using a single LLM call for efficiency with long inputs.
+    This is a significant optimization over sentence-by-sentence extraction.
     """
-    try:
-        sentences = sent_tokenize(text)
-    except Exception:
-        sentences = text.split('.')
+    if not text or not text.strip():
+        return []
 
-    simple_claims_text = []
-    complex_sentences = []
-
-    for sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
-        
-        if len(sentence.split()) > 20 or COMPLEX_CONJUNCTIONS.search(sentence):
-            complex_sentences.append(sentence)
-        else:
-            simple_claims_text.append(sentence)
-
-    all_claims_text = list(simple_claims_text)
-
-    if complex_sentences:
-        for sentence in complex_sentences:
-            llm_claims_for_sentence = _extract_claims_with_llm(sentence)
-            all_claims_text.extend([c.text for c in llm_claims_for_sentence])
-
-    initial_claims = [Claim(text=t) for t in all_claims_text if t]
+    initial_claims = _extract_claims_with_llm(text)
 
     claims = repair_split_claims(initial_claims)
     claims = filter_claims(claims)

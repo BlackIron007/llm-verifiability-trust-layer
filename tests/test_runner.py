@@ -106,6 +106,20 @@ TESTS = [
             "should_detect_contradiction": False,
             "must_be_supported": ["India gained independence in 1947.", "It became a republic in 1950."]
         }
+    },
+    {
+        "name": "11. Long-form answer with clustering",
+        "question": "Tell me about Marie Curie.",
+        "answer": "Marie Skłodowska Curie, born Maria Salomea Skłodowska, was a Polish and naturalized-French physicist and chemist who conducted pioneering research on radioactivity. She was the first woman to win a Nobel Prize, the first person and the only woman to win the Nobel Prize in two different scientific fields. Her husband, Pierre Curie, was a co-winner on her first Nobel Prize, making them the first-ever married couple to win the Nobel Prize. She was also the first woman to become a professor at the University of Paris in 1906. Her achievements included the development of the theory of radioactivity, the discovery of two elements, polonium and radium, and the isolation of radioactive isotopes. During World War I, she developed mobile radiography units to provide X-ray services to field hospitals. She died in 1934 from aplastic anemia caused by exposure to radiation.",
+        "expected": {
+            "min_confidence": 0.8,
+            "should_detect_contradiction": False,
+            "must_be_supported": [
+                "Marie Skłodowska Curie was a Polish and naturalized-French physicist and chemist",
+                "Marie Skłodowska Curie was the first person and the only woman to win the Nobel Prize in two different scientific fields",
+                "Marie Skłodowska Curie was the first woman to become a professor at the University of Paris in 1906"
+            ]
+        }
     }
 ]
 
@@ -113,29 +127,35 @@ def validate_test(test_case, output):
     """Validates the output against the expected results in the test case."""
     failures = []
     expected = test_case.get("expected", {})
-    claims_by_text = {c.get('text'): c for c in output.get('claims', [])}
+
+    def normalize_key(text):
+        return (text or "").strip().rstrip('.').lower()
+
+    claims_by_original_text = {}
+    for c in output.get('claims', []):
+        claims_by_original_text[normalize_key(c.get('text'))] = c
 
     if "max_confidence" in expected and output.get("overall_trust_score", 1.0) > expected["max_confidence"]:
         failures.append(f"Confidence {output['overall_trust_score']} exceeded max of {expected['max_confidence']}")
     if "min_confidence" in expected and output.get("overall_trust_score", 0.0) < expected["min_confidence"]:
         failures.append(f"Confidence {output['overall_trust_score']} was below min of {expected['min_confidence']}")
-    if expected.get("should_detect_contradiction") and not output.get("contradictions"):
+    if expected.get("should_detect_contradiction") is True and not output.get("contradictions"):
         failures.append("Failed to detect contradiction.")
     if expected.get("should_detect_contradiction") is False and output.get("contradictions"):
         failures.append("Incorrectly detected a contradiction.")
     
     for claim_text in expected.get("must_be_contradicted", []):
-        if claims_by_text.get(claim_text, {}).get("verification_status") != "CONTRADICTED":
+        if claims_by_original_text.get(normalize_key(claim_text), {}).get("verification_status") != "CONTRADICTED":
             failures.append(f"Claim '{claim_text}' was not marked as CONTRADICTED.")
     for claim_text in expected.get("must_be_supported", []):
-        if claims_by_text.get(claim_text, {}).get("verification_status") != "SUPPORTED":
+        if claims_by_original_text.get(normalize_key(claim_text), {}).get("verification_status") != "SUPPORTED":
             failures.append(f"Claim '{claim_text}' was not marked as SUPPORTED.")
     for claim_text in expected.get("must_be_unverifiable", []):
-        if claims_by_text.get(claim_text, {}).get("verification_status") != "UNVERIFIABLE":
+        if claims_by_original_text.get(normalize_key(claim_text), {}).get("verification_status") != "UNVERIFIABLE":
             failures.append(f"Claim '{claim_text}' was not marked as UNVERIFIABLE.")
     if "must_not_be_resolved" in expected:
         claim_text = expected["must_not_be_resolved"]
-        if claims_by_text.get(claim_text, {}).get("resolved_text"):
+        if claims_by_original_text.get(normalize_key(claim_text), {}).get("resolved_text"):
             failures.append(f"Claim '{claim_text}' was incorrectly resolved.")
 
     return failures

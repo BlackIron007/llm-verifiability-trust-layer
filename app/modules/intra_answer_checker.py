@@ -71,12 +71,16 @@ def _normalize_for_numeric_check(text: str) -> str:
 
 def detect_internal_contradictions(claims, mode="full"):
     """
-    Detect contradictions between claims within the same answer.
-    Uses both rule-based checks and NLI for broader coverage.
-    If a contradiction is found, it marks both claims.
+    Detects contradictions between claims. A single-pass approach for efficiency.
+    1. It first checks for high-confidence, rule-based contradictions (numeric, antonyms).
+    2. If no rule-based contradiction is found and mode is 'full', it prepares pairs for NLI.
+    3. Finally, it runs a batch NLI check on the remaining candidate pairs.
     """
     contradictions = []
     contradicted_indices = set()
+    
+    pairs_for_nli = []
+    meta_for_nli = []
 
     for i in range(len(claims)):
         for j in range(i + 1, len(claims)):
@@ -88,122 +92,80 @@ def detect_internal_contradictions(claims, mode="full"):
             claim_a = claim_a_obj.resolved_text or claim_a_obj.text
             claim_b = claim_b_obj.resolved_text or claim_b_obj.text
 
-            subj_a, attr_a = _get_subject_and_attribute(claim_a)
-            subj_b, attr_b = _get_subject_and_attribute(claim_b)
+            rule_contradiction_found = False
 
+            subj_a, _ = _get_subject_and_attribute(claim_a)
+            subj_b, _ = _get_subject_and_attribute(claim_b)
             numbers_a = _extract_and_normalize_numbers(claim_a)
             numbers_b = _extract_and_normalize_numbers(claim_b)
             if numbers_a and numbers_b and set(numbers_a) != set(numbers_b):
                 is_pronoun_ref = (subj_a and subj_b and subj_b.lower() in {"it", "he", "she", "they"} and j == i + 1)
-
                 base_a = _normalize_for_numeric_check(claim_a)
                 base_b = _normalize_for_numeric_check(claim_b)
                 cache_key = hash(frozenset({base_a, base_b}))
                 if cache_key not in embedding_cache:
                     embedding_cache[cache_key] = compute_similarity(base_a, base_b)
-                has_high_base_sim = embedding_cache[cache_key] > 0.95
-
-                if is_pronoun_ref or has_high_base_sim:
+                if embedding_cache.get(cache_key, 0) > 0.95 or is_pronoun_ref:
                     logger.info(f"Numeric contradiction found: '{claim_a}' vs '{claim_b}'")
-                    contradictions.append({
-                        "claim_a": claim_a, "claim_b": claim_b, "confidence": 1.0, "type": "numeric_heuristic"
-                    })
-                    claim_a_obj.verification_status = VerificationStatus.CONTRADICTED
-                    claim_a_obj.contradiction_strength = 1.0
-                    claim_b_obj.verification_status = VerificationStatus.CONTRADICTED
-                    claim_b_obj.contradiction_strength = 1.0
-                    contradicted_indices.add(i)
-                    contradicted_indices.add(j)
-                    continue
+                    _mark_contradiction(claims, {'i': i, 'j': j, 'claim_a_text': claim_a, 'claim_b_text': claim_b}, 1.0, contradictions, contradicted_indices)
+                    rule_contradiction_found = True
+            
+            if rule_contradiction_found: continue
 
+            subj_a, attr_a = _get_subject_and_attribute(claim_a)
+            subj_b, attr_b = _get_subject_and_attribute(claim_b)
             if subj_a and attr_a and subj_b and attr_b:
                 cache_key = hash(frozenset({subj_a, subj_b}))
                 if cache_key not in embedding_cache:
                     embedding_cache[cache_key] = compute_similarity(subj_a, subj_b)
-                subject_similarity = embedding_cache[cache_key]
+                if embedding_cache.get(cache_key, 0) > 0.9 and ANTONYMS.get(attr_a.lower()) == attr_b.lower():
+                    logger.info(f"Antonym contradiction found: '{claim_a}' vs '{claim_b}'")
+                    _mark_contradiction(claims, {'i': i, 'j': j, 'claim_a_text': claim_a, 'claim_b_text': claim_b}, 0.98, contradictions, contradicted_indices)
+                    rule_contradiction_found = True
 
-                if subject_similarity > 0.9:
-                    if ANTONYMS.get(attr_a.lower()) == attr_b.lower():
-                        logger.info(f"Antonym contradiction found: '{claim_a}' vs '{claim_b}'")
-                        contradictions.append({
-                            "claim_a": claim_a,
-                            "claim_b": claim_b,
-                            "confidence": 0.98,
-                            "type": "antonym_rule"
-                        })
-                        claim_a_obj.verification_status = VerificationStatus.CONTRADICTED
-                        claim_a_obj.contradiction_strength = 1.0
-                        claim_b_obj.verification_status = VerificationStatus.CONTRADICTED
-                        claim_b_obj.contradiction_strength = 1.0
-                        contradicted_indices.add(i)
-                        contradicted_indices.add(j)
-                        continue
+            if rule_contradiction_found: continue
 
-    if mode == "rules_only":
-        return contradictions
+            if mode == "full":
+                if numbers_a and numbers_b and set(numbers_a) != set(numbers_b):
+                    continue
+                
+                try:
+                    cache_key = hash(frozenset({claim_a, claim_b}))
+                    if cache_key not in embedding_cache:
+                        embedding_cache[cache_key] = compute_similarity(claim_a, claim_b)
+                    similarity = embedding_cache[cache_key]
+                except Exception as e:
+                    logger.error(f"Error computing similarity for NLI check: {e}")
+                    similarity = 0.0
+                
+                if similarity >= 0.95:
+                    pairs_for_nli.append((claim_a, claim_b))
+                    meta_for_nli.append({'i': i, 'j': j, 'claim_a_text': claim_a, 'claim_b_text': claim_b})
 
-    SIMILARITY_THRESHOLD = 0.85
-    CONTRADICTION_CONFIDENCE = 0.7
-
-    pairs_to_check = []
-    original_pairs_meta = []
-
-    for i in range(len(claims)):
-        for j in range(i + 1, len(claims)):
-            if i in contradicted_indices or j in contradicted_indices:
-                continue
-
-            claim_a_obj = claims[i]
-            claim_b_obj = claims[j]
-            claim_a = claim_a_obj.resolved_text or claim_a_obj.text
-            claim_b = claim_b_obj.resolved_text or claim_b_obj.text
-
-            numbers_a = _extract_and_normalize_numbers(claim_a)
-            numbers_b = _extract_and_normalize_numbers(claim_b)
-            if numbers_a and numbers_b and set(numbers_a) != set(numbers_b):
-                continue
-
-            try:
-                cache_key = hash(frozenset({claim_a, claim_b}))
-                if cache_key not in embedding_cache:
-                    embedding_cache[cache_key] = compute_similarity(claim_a, claim_b)
-                similarity = embedding_cache[cache_key]
-            except Exception as e:
-                logger.error(f"Error computing similarity in contradiction check: {e}")
-                similarity = 0.0
-
-            if similarity < SIMILARITY_THRESHOLD:
-                continue
-            
-            pairs_to_check.append((claim_a, claim_b))
-            original_pairs_meta.append({'i': i, 'j': j, 'claim_a_text': claim_a, 'claim_b_text': claim_b})
-
-    if not original_pairs_meta:
-        return contradictions
-
+    if pairs_for_nli:
+        logger.info(f"Checking {len(pairs_for_nli)} pairs for NLI contradiction.")
+        
     nli_batch_pairs = []
     nli_batch_meta = []
-    for meta in original_pairs_meta:
-        claim_a = meta['claim_a_text']
-        claim_b = meta['claim_b_text']
-        cache_key = hash((claim_a, claim_b))
+    for i, pair in enumerate(pairs_for_nli):
+        cache_key = hash(pair)
         if cache_key in nli_cache:
             label, score = nli_cache[cache_key]
-            if label == "contradicts" and score > CONTRADICTION_CONFIDENCE:
-                _mark_contradiction(claims, meta, score, contradictions, contradicted_indices)
+            if label == "contradicts" and score > 0.9:
+                _mark_contradiction(claims, meta_for_nli[i], score, contradictions, contradicted_indices)
         else:
-            nli_batch_pairs.append((claim_a, claim_b))
-            nli_batch_meta.append(meta)
+            nli_batch_pairs.append(pair)
+            nli_batch_meta.append(meta_for_nli[i])
 
     if nli_batch_pairs:
         results = check_claim_evidence_support_batch(nli_batch_pairs)
         for i, (label, score) in enumerate(results):
             pair = nli_batch_pairs[i]
-            cache_key = hash((pair[0], pair[1]))
+            cache_key = hash(pair)
             nli_cache[cache_key] = (label, score)
             
             meta = nli_batch_meta[i]
-            if label == "contradicts" and score > CONTRADICTION_CONFIDENCE:
+            if label == "contradicts" and score > 0.9:
                 _mark_contradiction(claims, meta, score, contradictions, contradicted_indices)
 
     return contradictions

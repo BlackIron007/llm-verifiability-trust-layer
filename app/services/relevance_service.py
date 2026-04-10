@@ -13,6 +13,11 @@ def compute_qa_relevance(question: str, answer: str) -> float:
         similarity = compute_similarity(question, answer)
         embedding_cache[cache_key] = similarity
 
-    relevance_score = max(0.0, min(similarity, 1.0))
+    if similarity >= 0.5:
+        relevance_score = 0.95
+    elif similarity >= 0.3:
+        relevance_score = 0.7
+    else:
+        relevance_score = max(0.0, similarity)
 
     return round(relevance_score, 3)
