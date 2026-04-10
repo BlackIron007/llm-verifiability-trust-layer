@@ -178,12 +178,31 @@ def run_tests():
     print("Starting tests in 2s...")
     time.sleep(2)
     for test in TESTS:
-        print(f"Running: {test['name']}...", end=" ")
-        start_time = time.time()
-        
+        print(f"Running: {test['name']}...", end=" ", flush=True)
+
         try:
-            resp = requests.post(API_URL, json={"question": test["question"], "answer": test["answer"], "mode": "full"}, headers=headers)
-            latency = time.time() - start_time
+            resp = None
+            latency = 0
+            max_retries = 3
+            for attempt in range(max_retries):
+                start_time = time.time()
+                resp = requests.post(API_URL, json={"question": test["question"], "answer": test["answer"], "mode": "full"}, headers=headers)
+                latency = time.time() - start_time
+
+                if resp.status_code != 429:
+                    break
+                
+                if attempt < max_retries - 1:
+                    wait_time = 10
+                    print(f"Rate limited. Retrying in {wait_time}s... ({attempt + 1}/{max_retries})", end=" ", flush=True)
+                    time.sleep(wait_time)
+
+            if resp.status_code != 200:
+                print(f"FAILED (HTTP {resp.status_code})")
+                all_failures[test['name']] = [f"API returned non-200 status: {resp.status_code} {resp.text}"]
+                results_md += f"**Execution failed!** API returned HTTP {resp.status_code}: {resp.text}\n"
+                results_md += "---\n\n"
+                continue
                 
             data = resp.json()
             
@@ -221,10 +240,14 @@ def run_tests():
                 results_md += f"Error / Unsupported response structure: {data}\n"
                 
         except Exception as e:
+            if 'resp' not in locals() or resp is None:
+                all_failures[test['name']] = [f"Request failed: {e}"]
             print(f"CRASHED: {e}")
             results_md += f"**Execution failed!** Exception: {e}\n"
             
         results_md += "---\n\n"
+
+        time.sleep(6)
         
     out_path = "analysis_results.md"
     with open(out_path, "w", encoding="utf-8") as f:

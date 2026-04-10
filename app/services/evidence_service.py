@@ -1,4 +1,5 @@
-from app.services.embedding_service import compute_similarity
+from app.services.embedding_service import compute_similarity, model
+from sentence_transformers.util import cos_sim
 from app.schemas.evidence import Evidence
 import nltk
 from nltk.tokenize import sent_tokenize
@@ -16,22 +17,17 @@ def best_sentence_match(claim_text: str, paragraph: str):
     except Exception:
         sentences = [paragraph] if paragraph else []
 
-    best_score = 0.0
-    best_idx = -1
+    if not sentences:
+        return "", 0.0
 
-    for i, sentence in enumerate(sentences):
-        try:
-            cache_key = hash(frozenset({claim_text, sentence}))
-            if cache_key not in embedding_cache:
-                embedding_cache[cache_key] = compute_similarity(claim_text, sentence)
-            score = embedding_cache[cache_key]
-        except Exception:
-            score = 0.0
-        if score > best_score:
-            best_score = score
-            best_idx = i
-
-    if best_idx == -1:
+    try:
+        claim_emb = model.encode(claim_text)
+        sentences_emb = model.encode(sentences)
+        
+        scores = cos_sim(claim_emb, sentences_emb)[0]
+        best_idx = scores.argmax().item()
+        best_score = float(scores[best_idx])
+    except Exception as e:
         return "", 0.0
 
     start_idx = max(0, best_idx - 1)
@@ -48,25 +44,30 @@ import logging
 
 logger = logging.getLogger("verifier")
 
-def retrieve_evidence(claim_text: str, top_k: int = 3, mode: str = "full"):
+import asyncio
+
+async def retrieve_evidence(claim_text: str, top_k: int = 3, mode: str = "full"):
     """
     Implements a tiered evidence retrieval strategy for performance and reliability.
-    Tier 1: Wikipedia (fast, high-trust)
-    Tier 2: DuckDuckGo Search (fallback, skipped in 'fast' mode)
     """
     logger.info(f"Tier 1 Retrieval: Querying Wikipedia for '{claim_text}'")
-    wiki_evidence = retrieve_wikipedia_evidence(claim_text, top_k=2)
 
     if mode == "fast":
         logger.info("Fast mode: Skipping web search.")
-        return wiki_evidence
+        return await retrieve_wikipedia_evidence(claim_text, top_k=2)
 
-    if wiki_evidence and any(ev.similarity > 0.8 for ev in wiki_evidence):
-        logger.info("Tier 1 successful, strong evidence found. Skipping web search.")
-        return wiki_evidence
+    logger.info(f"Tier 2 Retrieval: Querying DDGS alongside Wikipedia for '{claim_text}'")
 
-    logger.info(f"Tier 2 Retrieval: Querying DDGS for '{claim_text}'")
-    ddgs_evidence = retrieve_ddgs_evidence(claim_text, top_k=2)
+    wiki_task = asyncio.create_task(retrieve_wikipedia_evidence(claim_text, top_k=2))
+    ddgs_task = asyncio.create_task(asyncio.to_thread(retrieve_ddgs_evidence, claim_text, top_k=2))
+
+    results = await asyncio.gather(wiki_task, ddgs_task, return_exceptions=True)
+    
+    wiki_evidence = results[0] if not isinstance(results[0], Exception) else []
+    ddgs_evidence = results[1] if not isinstance(results[1], Exception) else []
+
+    if wiki_evidence and any((ev.similarity or 0) > 0.8 for ev in wiki_evidence):
+        logger.info("Strong Wikipedia evidence found. Utilizing both sources.")
 
     all_evidence = wiki_evidence + ddgs_evidence
     all_evidence.sort(
@@ -77,7 +78,7 @@ def retrieve_evidence(claim_text: str, top_k: int = 3, mode: str = "full"):
     return all_evidence
 
 
-def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
+async def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
     """
     Retrieves evidence paragraphs from Wikipedia
     and ranks them by semantic similarity to the claim.
@@ -94,21 +95,28 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
             "https://en.wikipedia.org/w/api.php?action=opensearch"
             f"&search={quote(claim_text)}&limit={top_k}&namespace=0&format=json"
         )
-        with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
-            search_response = client.get(search_url)
+        async with httpx.AsyncClient(headers=HEADERS, timeout=TIMEOUT) as client:
+            search_response = await client.get(search_url)
             search_response.raise_for_status()
             search_results = search_response.json()
 
-        page_titles = search_results[1] if len(search_results) > 1 else []
+            page_titles = search_results[1] if len(search_results) > 1 else []
 
-        for title in page_titles:
-            try:
+            async def fetch_summary(title):
                 summary_url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{quote(title)}"
-                with httpx.Client(headers=HEADERS, timeout=TIMEOUT) as client:
-                    summary_response = client.get(summary_url)
-                    if summary_response.status_code != 200:
-                        continue
-                    page_data = summary_response.json()
+                try:
+                    summary_response = await client.get(summary_url)
+                    if summary_response.status_code == 200:
+                        return summary_response.json()
+                except Exception as e:
+                    logger.warning(f"Failed to process Wikipedia title '{title}': {e}")
+                return None
+            
+            tasks = [fetch_summary(t) for t in page_titles]
+            summaries = await asyncio.gather(*tasks)
+
+            for page_data in summaries:
+                if not page_data: continue
 
                 page_title = page_data.get("title", "")
                 page_url = page_data.get("content_urls", {}).get("desktop", {}).get("page", "")
@@ -157,12 +165,8 @@ def retrieve_wikipedia_evidence(claim_text: str, top_k: int = 3):
                         )
                     )
 
-            except (httpx.RequestError, Exception) as e:
-                logger.warning(f"Failed to process Wikipedia title '{title}': {e}")
-                continue
-    except (httpx.RequestError, Exception) as e:
+    except Exception as e:
         logger.error(f"Wikipedia evidence retrieval failed: {e}")
-        pass
 
     evidence_list.sort(key=lambda x: x.similarity, reverse=True)
 

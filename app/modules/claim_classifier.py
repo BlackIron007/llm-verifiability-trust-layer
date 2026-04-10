@@ -90,6 +90,11 @@ def classify_claim(claim: Claim) -> Claim:
     
     logger.info(f"Claim classification cache miss for: '{claim.text}'")
 
+    if re.search(r'\d', claim.text):
+        claim.claim_type = ClaimType.HARD_FACT
+        claim_classification_cache[cache_key] = claim.claim_type
+        return claim
+
     from app.modules.coreference_resolver import _extract_named_entities
     if _extract_named_entities(claim.text) and len(claim.text.split()) >= 3:
         claim.claim_type = ClaimType.HARD_FACT

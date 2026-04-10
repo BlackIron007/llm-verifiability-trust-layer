@@ -171,6 +171,22 @@ def extract_claims(text: str) -> List[Claim]:
     if not text or not text.strip():
         return []
 
+    if len(text.split()) < 40:
+        sentences = sent_tokenize(text)
+        if len(sentences) <= 3:
+            fast_claims = [Claim(text=s.strip()) for s in sentences if s.strip()]
+            fast_claims = filter_claims(fast_claims)
+            if fast_claims:
+                seen = set()
+                deduped: List[Claim] = []
+                for c in fast_claims:
+                    key = c.text.lower()
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    deduped.append(c)
+                return deduped
+
     initial_claims = _extract_claims_with_llm(text)
 
     claims = repair_split_claims(initial_claims)
